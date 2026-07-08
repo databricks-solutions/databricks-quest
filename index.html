@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Databricks Quest — Gamify platform adoption</title>
+  <meta name="description" content="Turn Databricks platform adoption into a game. Points, tiers, and missions scored straight from your Unity Catalog system tables — no manual tracking." />
+  <link rel="canonical" href="https://databricks-solutions.github.io/databricks-quest/" />
+  <link rel="icon" href="images/databricks-logo.svg" />
+  <meta property="og:title" content="Databricks Quest" />
+  <meta property="og:description" content="Gamify Databricks platform adoption — points, tiers and missions from system tables." />
+  <meta property="og:type" content="website" />
+  <style>
+    :root{
+      --bg:#070A12; --panel:#0D1320; --panel-2:#111827; --line:rgba(255,255,255,.08);
+      --text:#E8ECF4; --muted:#94A3B8; --dim:#64748B;
+      --orange:#FF5F1F; --orange-2:#FF8A3D; --amber:#F5B72E; --cyan:#00C2D7; --green:#22C55E;
+      --radius:18px; --max:1160px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    img{max-width:100%;display:block}
+    .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+    .accent{color:var(--orange-2)}
+    /* glow background */
+    body{background:
+      radial-gradient(900px 500px at 12% -5%, rgba(255,95,31,.14), transparent 60%),
+      radial-gradient(800px 500px at 100% 0%, rgba(0,194,215,.10), transparent 55%),
+      var(--bg);}
+
+    /* nav */
+    header.nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(7,10,18,.72);border-bottom:1px solid var(--line)}
+    .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px}
+    .brand{display:flex;align-items:center;gap:12px;font-weight:700}
+    .brand img{width:30px;height:30px}
+    .brand .sub{font-size:11px;letter-spacing:.28em;color:var(--orange-2);font-weight:800;text-transform:uppercase}
+    .nav-links{display:flex;align-items:center;gap:28px;font-size:14px;color:var(--muted)}
+    .nav-links a:hover{color:var(--text)}
+    .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;padding:10px 18px;border-radius:12px;border:1px solid var(--line);transition:all .15s}
+    .btn:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.04)}
+    .btn-primary{background:linear-gradient(90deg,#FF7A1A,#E93D1E);border:none;color:#fff;box-shadow:0 10px 30px rgba(255,95,31,.25)}
+    .btn-primary:hover{filter:brightness(1.08);background:linear-gradient(90deg,#FF7A1A,#E93D1E)}
+    @media(max-width:760px){.nav-links a:not(.btn){display:none}}
+
+    /* hero */
+    .hero{text-align:center;padding:88px 0 40px}
+    .eyebrow{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--amber);border:1px solid rgba(245,183,46,.3);background:rgba(245,183,46,.08);padding:6px 14px;border-radius:999px;margin-bottom:22px}
+    .hero h1{font-size:clamp(38px,6vw,68px);line-height:1.05;font-weight:800;letter-spacing:-.02em}
+    .hero h1 .grad{background:linear-gradient(90deg,#FF8A3D,#F5B72E);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .hero p.lead{max-width:720px;margin:22px auto 0;font-size:clamp(17px,2.2vw,21px);color:var(--muted)}
+    .hero .cta{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap}
+    .hero-shot{margin:56px auto 0;max-width:1050px;border-radius:var(--radius);border:1px solid var(--line);box-shadow:0 40px 120px rgba(0,0,0,.6);overflow:hidden}
+
+    /* generic section */
+    section{padding:70px 0}
+    .section-head{text-align:center;max-width:720px;margin:0 auto 48px}
+    .section-head h2{font-size:clamp(28px,4vw,40px);font-weight:800;letter-spacing:-.02em}
+    .section-head p{color:var(--muted);margin-top:14px;font-size:17px}
+
+    /* value cards */
+    .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+    @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:520px){.cards{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.02));border:1px solid var(--line);border-radius:var(--radius);padding:24px}
+    .card .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px;background:rgba(255,95,31,.12)}
+    .card h3{font-size:17px;margin-bottom:8px}
+    .card p{color:var(--muted);font-size:14.5px}
+
+    /* feature rows */
+    .feature{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;padding:60px 0;border-top:1px solid var(--line)}
+    .feature.rev .txt{order:2}
+    @media(max-width:860px){.feature{grid-template-columns:1fr;gap:28px}.feature.rev .txt{order:0}}
+    .feature .tag{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--orange-2);margin-bottom:12px}
+    .feature h3{font-size:clamp(24px,3vw,32px);font-weight:800;letter-spacing:-.01em;margin-bottom:14px}
+    .feature p{color:var(--muted);font-size:16px}
+    .feature ul{list-style:none;margin-top:18px;display:flex;flex-direction:column;gap:10px}
+    .feature li{display:flex;gap:10px;color:var(--text);font-size:15px}
+    .feature li::before{content:"◆";color:var(--amber);font-size:12px;line-height:1.7}
+    .shot{border-radius:var(--radius);border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden}
+    /* flow diagram (replaces a screenshot) */
+    .flow{display:flex;flex-direction:column;gap:10px}
+    .flow-node{display:flex;align-items:center;gap:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+    .flow-node .fi{font-size:20px;width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:rgba(255,95,31,.12);border-radius:11px;flex-shrink:0}
+    .flow-node b{display:block;font-size:15px}
+    .flow-node small{color:var(--muted);font-size:12.5px}
+    .flow-node.accent-node{border-color:rgba(255,95,31,.4);background:linear-gradient(180deg,rgba(255,95,31,.13),rgba(255,255,255,.02))}
+    .flow-arrow{text-align:center;color:var(--dim);font-size:15px;line-height:1}
+
+    /* tiers */
+    .tiers{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+    @media(max-width:760px){.tiers{grid-template-columns:repeat(5,1fr);gap:8px}}
+    .tier{text-align:center;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:14px;padding:22px 10px}
+    .tier .dot{width:34px;height:34px;border-radius:50%;margin:0 auto 12px}
+    .tier b{display:block;font-size:15px}
+    .tier span{font-size:12.5px;color:var(--dim)}
+
+    /* steps */
+    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+    @media(max-width:760px){.steps{grid-template-columns:1fr}}
+    .step{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:var(--radius);padding:26px}
+    .step .n{width:34px;height:34px;border-radius:10px;background:rgba(255,95,31,.14);color:var(--orange-2);font-weight:800;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+    .step h4{font-size:17px;margin-bottom:8px}
+    .step p{color:var(--muted);font-size:14.5px}
+
+    /* code / cta */
+    .code{background:#0A0E17;border:1px solid var(--line);border-radius:14px;padding:18px 20px;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:13.5px;color:#CBD5E1;overflow-x:auto;margin-top:20px}
+    .code .c{color:var(--dim)}
+    .cta-box{text-align:center;background:linear-gradient(180deg,rgba(255,95,31,.10),rgba(255,255,255,.02));border:1px solid rgba(255,95,31,.25);border-radius:24px;padding:56px 24px}
+    footer{border-top:1px solid var(--line);padding:36px 0;color:var(--dim);font-size:13.5px;text-align:center}
+    footer a{color:var(--muted)}
+    footer a:hover{color:var(--text)}
+  </style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="images/databricks-logo.svg" alt="Databricks" />
+      <span>databricks <span class="sub">Quest</span></span>
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#start">Get started</a>
+      <a class="btn" href="https://github.com/databricks-solutions/databricks-quest" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<a id="top"></a>
+<section class="hero wrap">
+  <span class="eyebrow">Built entirely on Databricks</span>
+  <h1>Turn platform adoption<br/>into <span class="grad">a game</span></h1>
+  <p class="lead">Databricks Quest rewards your team for the real work they do on the platform — building pipelines, running jobs, querying data, shipping models. Points, tiers and missions are scored straight from your Unity Catalog <strong>system tables</strong>. No manual tracking, no self-reporting.</p>
+  <div class="cta">
+    <a class="btn btn-primary" href="https://github.com/databricks-solutions/databricks-quest" target="_blank" rel="noreferrer">View on GitHub →</a>
+    <a class="btn" href="#start">Deploy it</a>
+  </div>
+  <div class="hero-shot"><img src="images/overview.png" alt="Databricks Quest dashboard" /></div>
+</section>
+
+<section class="wrap" id="why">
+  <div class="section-head">
+    <h2>Why teams run Quest</h2>
+    <p>A friendly nudge that turns platform enablement into momentum — without adding a single manual step.</p>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="ico">🎯</div><h3>Drives real adoption</h3><p>Missions map to genuine platform actions across data engineering, analytics, AI/ML and governance.</p></div>
+    <div class="card"><div class="ico">⚡</div><h3>Zero manual tracking</h3><p>Everything is detected automatically from system tables. Nobody logs anything by hand.</p></div>
+    <div class="card"><div class="ico">🏆</div><h3>Healthy competition</h3><p>Weekly leaderboard, tiers and badges keep the whole team engaged and climbing.</p></div>
+    <div class="card"><div class="ico">🧱</div><h3>100% Databricks-native</h3><p>System Tables, Delta, Lakebase and Databricks Apps. Deploys into your own workspace.</p></div>
+  </div>
+</section>
+
+<div class="wrap" id="features">
+
+  <div class="feature">
+    <div class="txt">
+      <div class="tag">Personal dashboard</div>
+      <h3>Every explorer gets their own journey</h3>
+      <p>A personalised overview shows your tier, total points, weekly momentum, streak, product breadth, badges and the next mission to tackle.</p>
+      <ul>
+        <li>Live progress toward the next tier</li>
+        <li>Recommended next mission, detected from your activity</li>
+        <li>Recent activity feed and earned badges</li>
+      </ul>
+    </div>
+    <div class="shot"><img src="images/overview.png" alt="Personal dashboard" /></div>
+  </div>
+
+  <div class="feature rev">
+    <div class="txt">
+      <div class="tag">Missions</div>
+      <h3>Points for the work you already do</h3>
+      <p>Forty missions across Getting Started, Data Engineering, Business Users, Lakebase, AI/ML, Streaming, Engagement and Governance. Complete the real platform action and the points land on the next scoring run.</p>
+      <ul>
+        <li>Grouped by persona track and difficulty</li>
+        <li>One-time and repeatable weekly/monthly missions</li>
+        <li>Click any mission for a floating detail panel</li>
+      </ul>
+    </div>
+    <div class="shot"><img src="images/missions.png" alt="Missions catalogue" /></div>
+  </div>
+
+  <div class="feature">
+    <div class="txt">
+      <div class="tag">Mission detail</div>
+      <h3>Know exactly how each mission is scored</h3>
+      <p>Every mission explains how it's detected from Databricks System Tables — reward, difficulty, type and status at a glance. No manual claim required.</p>
+    </div>
+    <div class="shot"><img src="images/mission-detail.png" alt="Mission detail panel" /></div>
+  </div>
+
+  <div class="feature rev">
+    <div class="txt">
+      <div class="tag">Leaderboard &amp; recognition</div>
+      <h3>A weekly race worth showing up for</h3>
+      <p>See where you stand this week and all-time. The top explorers each week earn recognition, and tiers give everyone a long-term goal to climb.</p>
+      <ul>
+        <li>Weekly, all-time and team views</li>
+        <li>Podium and full ranked table</li>
+        <li>Recognition, not gimmicks</li>
+      </ul>
+    </div>
+    <div class="shot"><img src="images/leaderboard.png" alt="Leaderboard" /></div>
+  </div>
+
+  <div class="feature">
+    <div class="txt">
+      <div class="tag">Built on Databricks</div>
+      <h3>A scoring pipeline you can trust</h3>
+      <p>A scheduled Databricks Job reads system tables, scores every mission, computes tiers and badges, and writes the results to Delta — refreshing automatically every few hours.</p>
+      <ul>
+        <li>System Tables → Delta → Lakebase</li>
+        <li>Served as a Databricks App with workspace SSO</li>
+        <li>Runs entirely inside your own workspace</li>
+      </ul>
+    </div>
+    <div class="flow">
+      <div class="flow-node"><span class="fi">🗄️</span><div><b>Unity Catalog system tables</b><small>billing.usage · query.history · lakeflow · access.audit</small></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node"><span class="fi">⚙️</span><div><b>Scheduled scoring job</b><small>scores missions, points, levels and badges</small></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node"><span class="fi">🔺</span><div><b>Delta tables</b><small>per-user results, refreshed every few hours</small></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node"><span class="fi">🐘</span><div><b>Lakebase or SQL warehouse</b><small>serving layer</small></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node accent-node"><span class="fi">🎯</span><div><b>Databricks App</b><small>personal dashboard, workspace SSO</small></div></div>
+    </div>
+  </div>
+
+</div>
+
+<section class="wrap" id="tiers">
+  <div class="section-head">
+    <h2>Climb the tiers</h2>
+    <p>Total points move you up a tier — a long-term goal alongside the weekly race.</p>
+  </div>
+  <div class="tiers">
+    <div class="tier"><div class="dot" style="background:#CD7F32"></div><b>Bronze</b><span>0 pts</span></div>
+    <div class="tier"><div class="dot" style="background:#CBD5E1"></div><b>Silver</b><span>300 pts</span></div>
+    <div class="tier"><div class="dot" style="background:#F5B72E"></div><b>Gold</b><span>800 pts</span></div>
+    <div class="tier"><div class="dot" style="background:#A78BFA"></div><b>Platinum</b><span>2,000 pts</span></div>
+    <div class="tier"><div class="dot" style="background:#FF5F1F"></div><b>Elite</b><span>5,000 pts</span></div>
+  </div>
+</section>
+
+<section class="wrap" id="how">
+  <div class="section-head">
+    <h2>How it works</h2>
+    <p>Three moving parts, all native to Databricks.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><h4>Read system tables</h4><p>A scheduled job scans <code>system.billing.usage</code>, <code>system.query.history</code>, <code>system.lakeflow.*</code> and <code>system.access.audit</code> for real activity.</p></div>
+    <div class="step"><div class="n">2</div><h4>Score missions &amp; tiers</h4><p>Activity is turned into mission completions, points, streaks, tiers and badges, written to Delta tables.</p></div>
+    <div class="step"><div class="n">3</div><h4>Serve the app</h4><p>A Databricks App reads the scored data (via Lakebase or a SQL warehouse) and shows each person their own dashboard.</p></div>
+  </div>
+</section>
+
+<section class="wrap" id="start">
+  <div class="cta-box">
+    <div class="section-head" style="margin-bottom:8px">
+      <h2>Deploy Quest in your workspace</h2>
+      <p>Clone the repo and run one script — it handles the app, the scoring job and the data backend.</p>
+    </div>
+    <div class="code" style="max-width:680px;margin-left:auto;margin-right:auto;text-align:left">
+      <span class="c"># clone and deploy into your Databricks workspace</span><br/>
+      git clone https://github.com/databricks-solutions/databricks-quest.git<br/>
+      cd databricks-quest<br/>
+      ./deploy.sh --catalog &lt;your_catalog&gt;
+    </div>
+    <div class="cta" style="justify-content:center;margin-top:26px">
+      <a class="btn btn-primary" href="https://github.com/databricks-solutions/databricks-quest" target="_blank" rel="noreferrer">Get the code →</a>
+      <a class="btn" href="https://github.com/databricks-solutions/databricks-quest/blob/main/SETUP.md" target="_blank" rel="noreferrer">Read the setup guide</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Databricks Quest — gamify platform adoption. Built on System Tables, Delta, Lakebase and Databricks Apps.</p>
+    <p style="margin-top:8px"><a href="https://github.com/databricks-solutions/databricks-quest">github.com/databricks-solutions/databricks-quest</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

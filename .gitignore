@@ -1,5 +1,29 @@
-*conf*.json
-.DS_Store
-__pycache__
-.idea/
+node_modules/
+dist/
+.vite/
+*.pyc
+__pycache__/
 .env
+.databricks/
+*.egg-info/
+build/
+.DS_Store
+# app/static/ is intentionally COMMITTED (prebuilt frontend) so deploy works
+# with --skip-build and zero npm registry access (restricted customer networks).
+frontend/node_modules/
+frontend/dist/
+
+# Python virtual environments
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+
+# Python tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+frontend/node_modules

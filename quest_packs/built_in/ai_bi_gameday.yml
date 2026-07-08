@@ -1,0 +1,138 @@
+schema_version: "1.0"
+pack:
+  slug: ai-bi-intelligence-challenge
+  title: AI/BI Intelligence Challenge
+  version: "0.1.0"
+  description: A two-hour GameDay where teams create governed, trusted business intelligence on Databricks.
+  audience: [analysts, data_engineers, solution_architects]
+  duration_minutes: 120
+  difficulty: intermediate
+  owner: databricks-field
+
+scenario:
+  title: Orbit Travel Board Briefing
+  narrative_md: |
+    Orbit Travel's leadership team needs a trusted view of bookings, margin, and customer segments.
+    Data is scattered and quality is questionable. Your team must build a governed foundation and
+    produce an executive-ready intelligence layer before the board meeting.
+
+learning_objectives:
+  - Build governed Delta tables
+  - Create useful analytical outputs
+  - Validate quality and lineage
+  - Create an AI/BI experience
+
+capabilities_required:
+  - unity_catalog
+  - sql_warehouse
+  - dashboards
+
+resources:
+  team_namespace:
+    catalog_template: "${event_catalog}"
+    schema_template: "team_${team_slug}"
+  seed_data:
+    - name: bookings_raw
+      type: csv
+      target: "${team_catalog}.${team_schema}.bookings_raw"
+
+scoring_defaults:
+  max_attempts_without_penalty: 3
+  attempt_penalty_after_max: -5
+  hints_enabled: true
+
+quests:
+  - slug: q1-foundation
+    title: Build the Governed Foundation
+    category: governance
+    difficulty: beginner
+    narrative_md: |
+      The business does not trust the raw booking data. Create a governed foundation.
+    unlock_rule:
+      type: always
+    tasks:
+      - slug: create-bronze-table
+        title: Create bookings bronze table
+        objective: Create a managed Delta table named `bookings_bronze` in your team schema.
+        instructions_md: |
+          Use your assigned team schema and create a managed Delta table `bookings_bronze`
+          from the seeded `bookings_raw` data.
+        success_criteria_md: |
+          The table exists and contains at least 1,000 rows.
+        points: 100
+        validators:
+          - id: bronze-row-count
+            type: sql_assertion
+            mode: sync
+            statement: |
+              SELECT COUNT(*) AS cnt
+              FROM ${team_catalog}.${team_schema}.bookings_bronze
+            expect:
+              operator: ">="
+              value: 1000
+            timeout_seconds: 15
+        hints:
+          - title: Start with raw data
+            penalty_points: -10
+            body_md: Look for `bookings_raw` in your team schema.
+
+      - slug: silver-quality
+        title: Remove invalid bookings
+        objective: Create `bookings_silver` with invalid booking/customer records removed.
+        points: 150
+        validators:
+          - id: no-null-keys
+            type: sql_assertion
+            mode: sync
+            statement: |
+              SELECT COUNT(*) AS invalid_rows
+              FROM ${team_catalog}.${team_schema}.bookings_silver
+              WHERE booking_id IS NULL OR customer_id IS NULL
+            expect:
+              operator: "="
+              value: 0
+
+  - slug: q2-business-output
+    title: Create the Executive Metric Layer
+    category: analytics
+    difficulty: intermediate
+    unlock_rule:
+      type: quest_completed
+      quest_slug: q1-foundation
+    tasks:
+      - slug: margin-summary
+        title: Build a margin summary table
+        objective: Create `margin_summary_gold` with margin by region and product family.
+        points: 200
+        validators:
+          - id: margin-summary-exists
+            type: sql_assertion
+            mode: sync
+            statement: |
+              SELECT COUNT(*) AS cnt
+              FROM ${team_catalog}.${team_schema}.margin_summary_gold
+            expect:
+              operator: ">="
+              value: 10
+
+  - slug: q3-ai-bi
+    title: Deliver the Intelligence Experience
+    category: ai_bi
+    difficulty: intermediate
+    tasks:
+      - slug: dashboard-created
+        title: Create an executive dashboard
+        objective: Create a Databricks dashboard over your gold table.
+        points: 200
+        validators:
+          - id: dashboard-created
+            type: databricks_sdk
+            mode: sync
+            check: dashboard_exists_for_team
+            params:
+              name_contains: "${team_slug}"
+              created_after: "${event_start}"
+        hints:
+          - title: Dashboard hint
+            penalty_points: -20
+            body_md: Build the dashboard from the Databricks SQL editor or dashboard experience and include your team slug in the name.

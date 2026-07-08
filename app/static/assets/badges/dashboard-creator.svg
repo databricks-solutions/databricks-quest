@@ -1,0 +1,11 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="8" result="blur"/><feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.000 0 0 0 0 0.761 0 0 0 0 0.843 0 0 0 .7 0"/><feBlend in="SourceGraphic"/></filter>
+  <linearGradient id="bg" x1="34" y1="18" x2="220" y2="238"><stop stop-color="#00C2D7" stop-opacity=".28"/><stop offset="1" stop-color="#0D1320"/></linearGradient>
+</defs>
+<path d="M128 18L218 70V174L128 226L38 174V70L128 18Z" fill="url(#bg)" stroke="#00C2D7" stroke-width="4" filter="url(#glow)"/>
+<path d="M128 38L200 80V164L128 206L56 164V80L128 38Z" stroke="#00C2D7" stroke-opacity=".45" stroke-width="2"/>
+<circle cx="128" cy="104" r="42" fill="#00C2D7" fill-opacity=".12" stroke="#00C2D7" stroke-width="2"/>
+<text x="128" y="116" text-anchor="middle" font-family="Inter, Arial" font-size="30" font-weight="800" fill="#00C2D7">▣</text>
+<text x="128" y="186" text-anchor="middle" font-family="Inter, Arial" font-size="16" font-weight="700" fill="#F8FAFC">Dashboard</text><text x="128" y="208" text-anchor="middle" font-family="Inter, Arial" font-size="16" font-weight="700" fill="#F8FAFC">Creator</text>
+</svg>

@@ -1,0 +1,115 @@
+bundle:
+  name: databricks-quest
+
+sync:
+  include:
+    - app/static/**
+
+variables:
+  warehouse_id:
+    description: SQL Warehouse ID for the scoring pipeline job (find in SQL Warehouses page)
+  quest_catalog:
+    description: Unity Catalog name for Quest data (auto-created if possible, or create manually)
+  quest_schema:
+    description: Schema name for Quest scored tables (auto-created by scoring pipeline)
+    default: quest
+  lakebase_host:
+    description: Lakebase endpoint host (e.g. ep-xxx.database.us-east-1.cloud.databricks.com)
+    default: ""
+  lakebase_db:
+    description: Lakebase database name
+    default: quest_db
+  quest_data_backend:
+    description: Adoption data backend — "lakebase" (default) or "warehouse"
+    default: lakebase
+
+resources:
+  apps:
+    databricks_quest:
+      name: databricks-quest
+      description: "Databricks Quest - Gamification app for platform adoption"
+      source_code_path: ./app
+      config:
+        command:
+          - uvicorn
+          - main:app
+          - --host
+          - 0.0.0.0
+          - --port
+          - "8000"
+        env:
+          - name: LAKEBASE_HOST
+            value: ${var.lakebase_host}
+          - name: LAKEBASE_DB
+            value: ${var.lakebase_db}
+
+  jobs:
+    quest_scoring_pipeline:
+      name: "[Quest] Scoring Pipeline (${bundle.name})"
+      description: "Reads system tables, computes missions, points, badges, and leaderboards."
+      # The scoring notebook does whole-table DELETE + re-INSERT recomputes. Two
+      # runs at once (e.g. a manual/deploy run overlapping the 4-hour cron) hit a
+      # Delta ConcurrentDeleteReadException. Pin to 1 so overlapping runs queue
+      # instead of colliding. Without this, DAB dev mode defaults to >1.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 */4 * * ?"
+        timezone_id: UTC
+        # Run the 4-hour schedule even in dev. Set explicitly on the resource
+        # (development mode rejects an UNPAUSED trigger-pause *preset*).
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: run_scoring
+          notebook_task:
+            notebook_path: ./notebooks/scoring_pipeline.py
+            base_parameters:
+              quest_catalog: ${var.quest_catalog}
+              quest_schema: ${var.quest_schema}
+              app_name: databricks-quest
+              warehouse_id: ${var.warehouse_id}
+            source: WORKSPACE
+          environment_key: default
+        # Copy the freshly-scored Delta tables into Lakebase so the app refreshes
+        # every cycle (not just at deploy). No-ops when lakebase_host is unset.
+        - task_key: sync_to_lakebase
+          depends_on:
+            - task_key: run_scoring
+          notebook_task:
+            notebook_path: ./notebooks/lakebase_sync.py
+            base_parameters:
+              quest_catalog: ${var.quest_catalog}
+              quest_schema: ${var.quest_schema}
+              lakebase_host: ${var.lakebase_host}
+              lakebase_db: ${var.lakebase_db}
+              app_name: databricks-quest
+            source: WORKSPACE
+          environment_key: default
+        # Warehouse data backend: start/warm the serverless SQL warehouse each
+        # cycle so it's running after every 4-hour refresh (and drives DBUs).
+        # No-ops unless quest_data_backend=warehouse. Runs in parallel with sync.
+        - task_key: warm_warehouse
+          depends_on:
+            - task_key: run_scoring
+          notebook_task:
+            notebook_path: ./notebooks/warm_warehouse.py
+            base_parameters:
+              quest_data_backend: ${var.quest_data_backend}
+              warehouse_id: ${var.warehouse_id}
+            source: WORKSPACE
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg2-binary
+
+# Host comes from the active CLI profile / DATABRICKS_HOST at deploy time, so the
+# bundle is cloud-agnostic (works on AWS or Azure). deploy.sh exports it.
+targets:
+  dev:
+    mode: development
+    default: true
+
+  prod:
+    mode: production

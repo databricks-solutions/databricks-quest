@@ -1,0 +1,35 @@
+export const questTheme = {
+  colors: {
+    background: "#070A12",
+    shell: "#0D1320",
+    surface: "#111827",
+    surfaceElevated: "#172033",
+    surfaceAlt: "#1F2937",
+    textPrimary: "#F8FAFC",
+    textSecondary: "#CBD5E1",
+    textMuted: "#94A3B8",
+    borderSubtle: "rgba(255,255,255,0.08)",
+    borderAccent: "rgba(255,95,31,0.28)",
+    databricksOrange: "#FF5F1F",
+    orangeLight: "#FF8A3D",
+    gold: "#F5B72E",
+    success: "#22C55E",
+    analytics: "#00C2D7",
+    aiMl: "#8B5CF6",
+    governance: "#3B82F6",
+    engagement: "#F43F5E",
+    locked: "#64748B",
+  },
+  categories: {
+    foundation: { label: "Foundation", color: "#22C55E" },
+    engineering: { label: "Data Engineering", color: "#FF5F1F" },
+    analytics: { label: "Analytics / SQL", color: "#00C2D7" },
+    ai_ml: { label: "AI / ML", color: "#8B5CF6" },
+    governance: { label: "Governance", color: "#3B82F6" },
+    cost: { label: "Cost / Efficiency", color: "#F5B72E" },
+    engagement: { label: "Engagement", color: "#F43F5E" },
+    locked: { label: "Locked", color: "#64748B" },
+  },
+} as const
+
+export type QuestCategory = keyof typeof questTheme.categories

@@ -1,0 +1,46 @@
+/* Databricks Quest UX brand system */
+@import './styles/quest.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-700 rounded-full;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-slate-900/80 border border-slate-700/50 rounded-xl backdrop-blur-sm;
+  }
+  .card-hover {
+    @apply card transition-all duration-300 hover:border-amber-500/30 hover:shadow-lg hover:shadow-amber-500/5;
+  }
+  .badge-glow {
+    animation: badge-pulse 2s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes badge-pulse {
+  0% { box-shadow: 0 0 4px rgba(245, 158, 11, 0.2); }
+  100% { box-shadow: 0 0 16px rgba(245, 158, 11, 0.5); }
+}
+
+@keyframes progress-fill {
+  from { width: 0%; }
+}
+
+.progress-bar-animated {
+  animation: progress-fill 1s ease-out;
+}

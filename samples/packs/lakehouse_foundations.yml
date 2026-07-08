@@ -1,0 +1,223 @@
+schema_version: "1.0"
+
+pack:
+  slug: lakehouse-foundations
+  title: "Lakehouse Foundations"
+  version: "1.0.0"
+  description: >
+    An entry-level GameDay that takes teams through the core lakehouse loop:
+    govern a schema, ingest data into Delta, enforce quality, and expose a
+    curated table. Runs on a serverless SQL warehouse with per-team Unity
+    Catalog schemas provisioned by the host (PR08 resource bootstrap).
+  audience: ["new-hires", "customer-workshops", "enablement"]
+  duration_minutes: 90
+  difficulty: easy
+  owner: field-enablement
+
+scenario:
+  setup: >
+    Your team has a raw events drop and an empty governed schema
+    (${team_catalog}.${team_schema}). Build the medallion loop — bronze to
+    silver — with quality you can prove.
+
+learning_objectives:
+  - "Work inside a governed Unity Catalog namespace."
+  - "Ingest into a Delta table and validate row counts."
+  - "Enforce a data-quality rule and prove it holds."
+  - "Curate a silver table ready for consumption."
+
+capabilities_required:
+  - "Serverless SQL warehouse"
+  - "Unity Catalog schema per team"
+  - "Delta tables"
+
+resources:
+  seed_sql:
+    - >
+      CREATE TABLE IF NOT EXISTS ${team_catalog}.${team_schema}.bronze_events
+      (event_id INT, user_id INT, event_type STRING, value DOUBLE, event_date DATE)
+    - >
+      INSERT INTO ${team_catalog}.${team_schema}.bronze_events VALUES
+      (1, 10, 'view', 0.0, current_date()),
+      (2, 11, 'purchase', 49.99, current_date()),
+      (3, 10, 'purchase', 19.50, current_date())
+
+scoring_defaults:
+  base_points: 100
+  first_blood_bonus: 20
+
+quests:
+  - slug: govern
+    title: "Govern your namespace"
+    category: governance
+    difficulty: easy
+    base_points: 100
+    sort_order: 1
+    narrative_md: >
+      Every good lakehouse starts with a governed home. Confirm your team's
+      schema and bronze landing zone are ready.
+    facilitator_notes: >
+      The connectivity check is warehouse-independent. The bronze check depends
+      on host bootstrap having run for the event.
+    tasks:
+      - slug: connectivity-check
+        title: "Confirm warehouse connectivity"
+        objective: "Prove your team can run SQL on the event warehouse."
+        instructions_md: "Run the warm-up check to confirm connectivity."
+        success_criteria_md: "A trivial query returns 1."
+        points: 25
+        validation_mode: auto
+        validators:
+          - id: connectivity
+            type: sql_assertion
+            mode: sync
+            statement: "SELECT 1"
+            expect:
+              operator: "="
+              value: 1
+        hints:
+          - title: "Stuck?"
+            body_md: "Confirm the event warehouse with your host."
+            penalty_points: -5
+      - slug: bronze-ready
+        title: "Verify the bronze landing zone"
+        objective: "Confirm bronze_events landed in your schema."
+        instructions_md: >
+          Your team owns `${team_catalog}.${team_schema}`. Verify the bronze feed
+          is present.
+        success_criteria_md: "bronze_events has at least 3 rows."
+        points: 75
+        validation_mode: auto
+        validators:
+          - id: bronze-rows
+            type: sql_assertion
+            mode: sync
+            statement: "SELECT count(*) FROM ${team_catalog}.${team_schema}.bronze_events"
+            expect:
+              operator: ">="
+              value: 3
+        hints:
+          - title: "No data?"
+            body_md: "Ask the host to run resource bootstrap."
+            penalty_points: -10
+
+  - slug: refine
+    title: "Refine to silver"
+    category: modeling
+    difficulty: intermediate
+    base_points: 200
+    sort_order: 2
+    unlock_rule:
+      type: quest_completed
+      quest_slug: govern
+    narrative_md: >
+      Promote clean, purchase-only events into a silver table the rest of the
+      org can trust.
+    facilitator_notes: >
+      Teams create `silver_purchases` in their own schema containing only
+      purchase events. Validators read only from the team schema.
+    tasks:
+      - slug: build-silver
+        title: "Create silver_purchases"
+        objective: "Curate purchase events into a silver table."
+        instructions_md: >
+          Create `${team_catalog}.${team_schema}.silver_purchases` containing only
+          rows where event_type = 'purchase'.
+        success_criteria_md: "silver_purchases exists with the purchase rows."
+        points: 100
+        validation_mode: auto
+        validators:
+          - id: silver-count
+            type: sql_assertion
+            mode: sync
+            statement: "SELECT count(*) FROM ${team_catalog}.${team_schema}.silver_purchases"
+            expect:
+              operator: ">="
+              value: 2
+        hints:
+          - title: "Filter"
+            body_md: "WHERE event_type = 'purchase'."
+            penalty_points: -10
+      - slug: quality-gate
+        title: "Prove the quality rule"
+        objective: "Silver must contain only purchases."
+        instructions_md: >
+          Your silver table must contain zero non-purchase rows.
+        success_criteria_md: "No non-purchase rows in silver_purchases."
+        points: 100
+        validation_mode: auto
+        validators:
+          - id: no-non-purchases
+            type: sql_assertion
+            mode: sync
+            statement: >
+              SELECT count(*) FROM ${team_catalog}.${team_schema}.silver_purchases
+              WHERE event_type <> 'purchase'
+            expect:
+              operator: "="
+              value: 0
+        hints:
+          - title: "Leaking rows?"
+            body_md: "Rebuild silver from bronze with the purchase filter applied."
+            penalty_points: -15
+
+  - slug: prove-it
+    title: "Prove the outcome"
+    category: outcome
+    difficulty: intermediate
+    base_points: 150
+    sort_order: 3
+    unlock_rule:
+      type: quest_completed
+      quest_slug: refine
+    narrative_md: >
+      Show the business value: total purchase revenue, and a walkthrough of your
+      medallion design.
+    facilitator_notes: >
+      The revenue check is automated; the design walkthrough is host-reviewed.
+      The databricks_sdk validator documents the intended automated table-exists
+      check for when an SDK validator ships.
+    tasks:
+      - slug: revenue-total
+        title: "Compute purchase revenue"
+        objective: "Sum the value of all purchases."
+        instructions_md: >
+          The total `value` across silver_purchases must be greater than zero.
+        success_criteria_md: "Purchase revenue is positive."
+        points: 75
+        validation_mode: auto
+        validators:
+          - id: revenue-positive
+            type: sql_assertion
+            mode: sync
+            statement: "SELECT sum(value) FROM ${team_catalog}.${team_schema}.silver_purchases"
+            expect:
+              operator: ">"
+              value: 0
+        hints:
+          - title: "Hint"
+            body_md: "SUM(value) over the silver table."
+            penalty_points: -5
+      - slug: design-review
+        title: "Walk the host through your design"
+        objective: "Explain your bronze→silver design and quality rule."
+        instructions_md: >
+          Walk your host through the medallion design and how you proved quality.
+        success_criteria_md: "Host approves the design walkthrough."
+        points: 75
+        validation_mode: manual
+        manual_validation_required: true
+        validators:
+          - id: silver-table-exists
+            type: databricks_sdk
+            mode: sync
+            check: table_exists
+            params:
+              table: "${team_catalog}.${team_schema}.silver_purchases"
+          - id: host-confirm-design
+            type: manual
+            mode: sync
+        hints:
+          - title: "Talking points"
+            body_md: "Cover ingestion, the quality gate, and lineage."
+            penalty_points: -5

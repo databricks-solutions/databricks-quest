@@ -1,0 +1,176 @@
+:root {
+  --quest-bg: #070a12;
+  --quest-shell: #0d1320;
+  --quest-surface: #111827;
+  --quest-surface-elevated: #172033;
+  --quest-surface-alt: #1f2937;
+  --quest-text: #f8fafc;
+  --quest-text-secondary: #cbd5e1;
+  --quest-text-muted: #94a3b8;
+  --quest-border: rgba(255,255,255,0.08);
+  --quest-border-accent: rgba(255,95,31,0.28);
+  --quest-orange: #ff5f1f;
+  --quest-orange-light: #ff8a3d;
+  --quest-gold: #f5b72e;
+  --quest-success: #22c55e;
+  --quest-analytics: #00c2d7;
+  --quest-ai: #8b5cf6;
+  --quest-governance: #3b82f6;
+  --quest-engagement: #f43f5e;
+  --quest-locked: #64748b;
+}
+
+.quest-app-bg {
+  background:
+    radial-gradient(circle at 75% 0%, rgba(255,95,31,0.12), transparent 28rem),
+    radial-gradient(circle at 20% 20%, rgba(0,194,215,0.08), transparent 24rem),
+    linear-gradient(180deg, #070a12 0%, #050711 100%);
+}
+
+.quest-grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.quest-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--quest-border);
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(23,32,51,0.82) 0%, rgba(17,24,39,0.76) 100%);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.quest-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 85% 12%, rgba(255,95,31,0.12), transparent 34%);
+  opacity: 0.85;
+}
+
+.quest-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--quest-border-accent);
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(circle at 80% 20%, rgba(245,183,46,0.24), transparent 26rem),
+    radial-gradient(circle at 15% 35%, rgba(255,95,31,0.20), transparent 20rem),
+    linear-gradient(135deg, rgba(82,47,14,0.72), rgba(12,17,28,0.94) 64%);
+  box-shadow: 0 28px 80px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.03) inset;
+}
+
+.quest-orange-glow {
+  box-shadow: 0 0 0 1px rgba(255,95,31,0.26), 0 18px 48px rgba(255,95,31,0.16);
+}
+
+.quest-button-primary {
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, var(--quest-orange), #ff3d1f);
+  color: white;
+  box-shadow: 0 14px 36px rgba(255,95,31,0.28);
+}
+
+.quest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid var(--quest-border);
+  border-radius: 0.625rem;
+  background: rgba(255,255,255,0.04);
+  padding: 0.375rem 0.625rem;
+  color: var(--quest-text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.quest-topography {
+  background-image: url('/assets/backgrounds/quest-topography.svg');
+  background-size: cover;
+  background-position: center;
+}
+
+.quest-constellation {
+  background-image: url('/assets/backgrounds/quest-constellation.svg');
+  background-size: cover;
+  background-position: center;
+}
+
+.quest-skeleton {
+  position: relative;
+  overflow: hidden;
+}
+
+.quest-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: quest-shimmer 1.4s infinite;
+}
+
+@keyframes quest-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.quest-slide-in {
+  animation: quest-slide-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes quest-slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.quest-fade-in {
+  animation: quest-fade-in 0.2s ease-out;
+}
+
+@keyframes quest-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Subtle entrance motion (dependency-free; swap for framer-motion when desired). */
+.quest-rise {
+  animation: quest-rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes quest-rise {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quest-rise,
+  .quest-slide-in,
+  .quest-fade-in {
+    animation: none !important;
+  }
+  .quest-skeleton::after {
+    animation: none !important;
+  }
+}

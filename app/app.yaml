@@ -1,0 +1,11 @@
+# Placeholder config — deploy.sh regenerates this file (write_app_yaml) with the
+# real Lakebase endpoint, warehouse id, catalog/schema, and backend default for
+# the target workspace. Committed without environment values so a fresh deploy
+# never boots against another workspace's endpoints.
+command:
+  - uvicorn
+  - main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"

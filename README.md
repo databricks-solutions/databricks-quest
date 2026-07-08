@@ -33,14 +33,109 @@ The rest of this README describes **Adoption Mode**.
 
 ---
 
-## How It Works
+## How scoring works (end to end)
 
-1. A **scoring pipeline** runs every 4 hours, reading Databricks system tables to detect what each user has done on the platform
-2. It scores 30+ missions across Data Engineering, Analytics, AI/ML, and Engagement categories, plus continuous consumption points based on DBU spend
-3. Scored data is synced to **Lakebase** (managed PostgreSQL) for sub-second reads
-4. A **React + FastAPI app** runs as a Databricks App, showing each user their dashboard, missions, leaderboard, and badges
+Quest never asks users to self-report anything. Every point is derived from what
+they actually did on the platform, read from **Unity Catalog system tables**. The
+flow is:
 
-No separate accounts needed. Users log in with their workspace credentials.
+```
+Databricks system tables ──▶ Scoring pipeline (Spark notebook, every 4h)
+  (read-only, account-wide)      detect missions · compute points/levels/badges
+                                        │
+                                        ▼
+                          Delta tables in <catalog>.quest.*
+                          (mission_completions, user_points_fact,
+                           user_profile_snapshot, leaderboard,
+                           badges, notifications)
+                                        │
+                     ┌──────────────────┴───────────────────┐
+                     ▼                                        ▼
+        Lakebase (Postgres, synced)              SQL warehouse (reads Delta)
+                     └──────────────────┬───────────────────┘
+                                        ▼
+                        FastAPI backend ──▶ React app (Databricks App)
+                                        (user logs in with workspace SSO)
+```
+
+### 1. Detection — what counts as "doing something"
+
+The scoring notebook (`notebooks/scoring_pipeline.py`) runs one SQL query per
+mission against system tables:
+
+| Signal source | System table | Example missions |
+|---|---|---|
+| Compute usage / DBUs | `system.billing.usage` | First Steps, consumption points, Daily Driver |
+| Jobs & pipelines | `system.lakeflow.jobs`, `.job_run_timeline`, `.pipelines`, `.pipeline_update_timeline` | Job Creator, Pipeline Builder, Scheduler, Multi-Task Orchestrator |
+| Queries | `system.query.history` | Data Explorer, Power Analyst, Auto Loader Pioneer, AI Function Builder, Liquid Clustering |
+| Product actions (audit) | `system.access.audit` | Genie, dashboards, notebooks, apps, Lakebase, model serving, Vector Search, MLflow, UC grants |
+
+Each mission's query returns the set of users who qualify, and the results are
+`MERGE`d into `mission_completions`.
+
+### 2. Human activity only — the core scoring rule
+
+Quest is a game about **people adopting the platform**, not about machines running
+workloads. System tables attribute a scheduled job or an always-on endpoint to
+whoever it *runs as* — so without care, one person's nightly cron or a serving
+endpoint could top the leaderboard while they're on vacation. The pipeline
+prevents that:
+
+- **Automated compute is excluded.** Billing rows carrying a `job_id` or
+  `dlt_pipeline_id` are scheduled/automated and don't earn ongoing consumption or
+  activity points (`INTERACTIVE_USAGE` filter).
+- **Run-based missions count human-triggered runs only** — job runs with
+  `trigger_type = ONETIME` and pipeline updates with `trigger_type = USER_ACTION`,
+  never `CRON`/`PERIODIC`/`CONTINUOUS`.
+- **Consumption points come from an allow-list of interactive products**
+  (`ALL_PURPOSE`, `INTERACTIVE`, `SQL`, `AI_FUNCTIONS`, `GENIE`) — never always-on
+  machine products like `MODEL_SERVING` or `VECTOR_SEARCH`.
+- **A weekly per-user cap** (`WEEKLY_CONSUMPTION_POINT_CAP`, default 500) means
+  raw compute volume alone can never dominate the leaderboard.
+- **Service principals are swept out** — only email-shaped (human) identities are
+  scored.
+
+The result: the leaderboard reflects real human adoption, and someone who's
+inactive drops even if workloads they created keep running.
+
+### 3. Reward setup once, not every run
+
+Creating something is a one-time achievement; running it repeatedly is not. So:
+
+- **Creation missions** (Job Creator, Pipeline Builder, Scheduler, Auto Loader
+  Pioneer, etc.) fire **once**, on the first time the platform action is detected
+  (`WHEN NOT MATCHED` — idempotent).
+- **Repeatable missions** (weekly query counts, monthly consumption, streaks) are
+  recomputed from scratch each run (`DELETE` + re-insert) so tightened rules take
+  effect and stale qualifications don't linger.
+- **Tiered missions don't double-pay**: a week with 200+ queries earns Power
+  Analyst (200 pts) *or* Data Explorer (150 pts), never both.
+
+### 4. Points → levels, badges, leaderboard
+
+- **Mission points** are summed per user into `user_points_fact`, then rolled up
+  into `user_profile_snapshot` and `leaderboard` (all-time / weekly / monthly).
+- **Consumption points**: 1 point per 10 interactive DBUs that week (capped).
+- **Levels** are total-point thresholds: Bronze (0) → Silver (300) → Gold (800)
+  → Platinum (2,000) → Elite (5,000).
+- **Badges** are awarded for combinations: Platform Explorer (4+ products used),
+  Consistent Contributor (14-day streak), Pipeline Craftsman (5+ pipeline
+  missions), AI Pioneer (3+ AI/ML missions), Full Stack (missions in 5+
+  categories).
+- **Streaks** count consecutive active days and reset to 0 once activity lapses.
+
+### 5. Serving the app
+
+After scoring, the Delta tables are synced to **Lakebase** (managed Postgres) for
+sub-second reads. The **FastAPI backend** reads from Lakebase (or directly from
+the Delta tables via a **SQL warehouse**, selectable per deployment), and the
+**React frontend** renders each user's dashboard, missions, leaderboard, badges,
+and notifications. Users authenticate with their existing workspace credentials
+(SSO) — no separate accounts.
+
+The scoring job is idempotent and re-runnable: it runs every 4 hours on a
+schedule with `max_concurrent_runs = 1`, so overlapping runs queue instead of
+colliding.
 
 ---
 

@@ -65,7 +65,7 @@ mission against system tables:
 
 | Signal source | System table | Example missions |
 |---|---|---|
-| Compute usage / DBUs | `system.billing.usage` | First Steps, consumption points, Daily Driver |
+| Compute usage | `system.billing.usage` | First Steps, weekly usage bonus, Daily Driver |
 | Jobs & pipelines | `system.lakeflow.jobs`, `.job_run_timeline`, `.pipelines`, `.pipeline_update_timeline` | Job Creator, Pipeline Builder, Scheduler, Multi-Task Orchestrator |
 | Queries | `system.query.history` | Data Explorer, Power Analyst, Auto Loader Pioneer, AI Function Builder, Liquid Clustering |
 | Product actions (audit) | `system.access.audit` | Genie, dashboards, notebooks, apps, Lakebase, model serving, Vector Search, MLflow, UC grants |
@@ -82,16 +82,16 @@ endpoint could top the leaderboard while they're on vacation. The pipeline
 prevents that:
 
 - **Automated compute is excluded.** Billing rows carrying a `job_id` or
-  `dlt_pipeline_id` are scheduled/automated and don't earn ongoing consumption or
-  activity points (`INTERACTIVE_USAGE` filter).
+  `dlt_pipeline_id` are scheduled/automated and don't earn ongoing activity
+  points (`INTERACTIVE_USAGE` filter).
 - **Run-based missions count human-triggered runs only** — job runs with
   `trigger_type = ONETIME` and pipeline updates with `trigger_type = USER_ACTION`,
   never `CRON`/`PERIODIC`/`CONTINUOUS`.
-- **Consumption points come from an allow-list of interactive products**
+- **The weekly usage bonus comes from an allow-list of interactive products**
   (`ALL_PURPOSE`, `INTERACTIVE`, `SQL`, `AI_FUNCTIONS`, `GENIE`) — never always-on
   machine products like `MODEL_SERVING` or `VECTOR_SEARCH`.
 - **A weekly per-user cap** (`WEEKLY_CONSUMPTION_POINT_CAP`, default 500) means
-  raw compute volume alone can never dominate the leaderboard.
+  hands-on activity is what ranks people, not raw volume.
 - **Service principals are swept out** — only email-shaped (human) identities are
   scored.
 
@@ -115,7 +115,7 @@ Creating something is a one-time achievement; running it repeatedly is not. So:
 
 - **Mission points** are summed per user into `user_points_fact`, then rolled up
   into `user_profile_snapshot` and `leaderboard` (all-time / weekly / monthly).
-- **Consumption points**: 1 point per 10 interactive DBUs that week (capped).
+- **Weekly usage bonus**: a small points bonus for interactive hands-on work that week, capped per person.
 - **Levels** are total-point thresholds: Bronze (0) → Silver (300) → Gold (800)
   → Platinum (2,000) → Elite (5,000).
 - **Badges** are awarded for combinations: Platform Explorer (4+ products used),
@@ -170,13 +170,13 @@ The app reads its scored adoption data from one of two backends, and admins can 
 ./deploy.sh --data-backend warehouse   # provision BOTH, default to warehouse
 ```
 
-With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small, serverless SQL warehouse (1-hour auto-stop), grants the app service principal access to both, and the 4-hour scoring job warms the warehouse each run. Either way an admin can flip the active backend at runtime under **Admin -> Data Backend**, no redeploy needed.
+With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small, serverless SQL warehouse (1-hour auto-stop) and grants the app service principal access to both. Either way an admin can flip the active backend at runtime under **Admin -> Data Backend**, no redeploy needed.
 
 ### Useful flags
 
 | Flag | What it does |
 |------|--------------|
-| `--data-backend warehouse` | Provision both backends; default to the warehouse (drives DBUs). |
+| `--data-backend warehouse` | Provision both backends; default to reading through the SQL warehouse. |
 | `--skip-build` | Use the committed prebuilt frontend (no npm / registry access needed). |
 | `--skip-scoring` | Deploy without running the scoring job now (it still runs on schedule). |
 | `--profile <name>` | Use a specific CLI auth profile (recommended in restricted setups). |
@@ -188,8 +188,8 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 ## What Users See
 
 - **Dashboard** -- Current level, points, streak, badges, and next missions to complete
-- **Missions** -- 40+ missions across Data Engineering, Analytics, AI/ML, Streaming, Consumption, Engagement, plus **Business Users** and **Lakebase** tracks (the Missions page has a tab per track)
-- **Leaderboard** -- Top 10 users ranked by points, resets every Saturday. Weekly swag prizes for the top 3.
+- **Missions** -- 38 missions across Getting Started, Data Engineering, Analytics, AI/ML, Lakebase, Streaming, Engagement, and Governance, plus a **Business Users** track for Genie/dashboard/SQL/app work (the Missions page has a tab per category and track)
+- **Leaderboard** -- ranked by points (all-time, weekly, monthly), weekly window resets every Saturday, with recognition for the top performers.
 - **Admin** -- Pipeline health, user stats, mission completion charts, level distribution, and the **Data Backend** toggle (Lakebase / warehouse)
 
 ## Missions
@@ -246,19 +246,13 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 |---------|--------|------------|
 | Stream Starter | 250 | Run a Structured Streaming job for 24+ hours |
 
-### Consumption (DBU-based)
+### Product usage (interactive)
 | Mission | Points | What To Do |
 |---------|--------|------------|
-| First 100 DBUs | 50 | Reach 100 lifetime DBUs |
-| 1K DBU Club | 200 | Reach 1,000 lifetime DBUs |
-| 10K DBU Club | 500 | Reach 10,000 lifetime DBUs |
-| 100K DBU Club | 1,000 | Reach 100,000 lifetime DBUs |
-| SQL Analyst | 100 | 50+ SQL Warehouse DBUs in a month (repeatable) |
-| Job Runner | 100 | 50+ Jobs Compute DBUs in a month (repeatable) |
-| ML Practitioner | 150 | Any Model Serving DBUs in a month (repeatable) |
-| Pipeline Operator | 100 | 50+ DLT DBUs in a month (repeatable) |
+| SQL Analyst | 100 | Actively use a SQL Warehouse in a month (repeatable) |
+| ML Practitioner | 150 | Actively use Model Serving in a month (repeatable) |
 
-Plus **continuous consumption points**: 1 point per 10 DBUs consumed, scored weekly. This keeps the leaderboard dynamic and rewards sustained platform usage.
+Plus a small **weekly usage bonus** for interactive hands-on work, capped per person so it can never dominate the leaderboard (see [How scoring works](#how-scoring-works-end-to-end)). Only interactive human usage counts — scheduled jobs, pipelines, and always-on endpoints are excluded — so points reflect real people using the platform, not machines running workloads.
 
 ### Engagement
 | Mission | Points | What To Do |

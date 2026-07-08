@@ -2,7 +2,7 @@
 
 ### 🌐 [**Overview & screenshots → databricks-solutions.github.io/databricks-quest**](https://databricks-solutions.github.io/databricks-quest/)
 
-A gamification app that turns Databricks platform adoption into a game. Users earn points for building pipelines, running jobs, creating dashboards, querying data, and more. Weekly swag prizes keep things competitive.
+A gamification app that turns Databricks platform adoption into a game. Users earn points for building pipelines, running jobs, creating dashboards, querying data, and more. Weekly recognition for top performers keeps things competitive.
 
 Built entirely on Databricks: system tables for usage tracking, Delta Lake for scoring, Lakebase for fast reads, and Databricks Apps for hosting. Users log in with their existing workspace credentials.
 
@@ -14,7 +14,7 @@ Databricks Quest runs in two complementary modes from a **single codebase**, sel
 
 | Mode | What it is | When to use | Enable |
 |------|-----------|-------------|--------|
-| **Adoption Mode** (default) | The passive, system-table-driven platform-adoption game described below — 30+ missions, weekly leaderboard, swag. Always on. | Ongoing internal adoption, always-on workspace engagement. | On by default. No flag needed. |
+| **Adoption Mode** (default) | The passive, system-table-driven platform-adoption game described below — 38 missions, weekly leaderboard, recognition. Always on. | Ongoing internal adoption, always-on workspace engagement. | On by default. No flag needed. |
 | **Event Mode (GameDay)** | Configurable, facilitator-run GameDay events: quest packs, teams, deterministic validators, live scoring/leaderboard, host console, per-team resource bootstrap, and post-event reporting. | Hands-on events, SE/SA enablement, customer workshops, competitive team challenges, hunter-account motions. | Opt-in: `./deploy.sh --event-mode` (or `QUEST_EVENT_MODE=on`). Implied by the `master`/`child` federation roles. |
 
 Event Mode is **purely additive** — when it's off, the GameDay APIs return 404, the Event UI is hidden, and the GameDay migrations are skipped, so Adoption Mode behaves exactly as it always has. Event Mode can also span **multiple workspaces** (a master workspace aggregating child lab workspaces) via a shared Lakebase.
@@ -197,7 +197,7 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 ### Getting Started & Data Engineering
 | Mission | Points | What To Do |
 |---------|--------|------------|
-| First Steps | 25 | Use any Databricks compute for the first time |
+| First Steps | 25 | Record your first Databricks usage |
 | Job Creator | 100 | Create your first Lakeflow Job |
 | Pipeline Builder | 150 | Create your first Lakeflow Spark Declarative Pipeline |
 | Pipeline Runner | 200 | Run a pipeline successfully |
@@ -239,12 +239,12 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 | Model Deployer | 300 | Deploy a model to a serving endpoint |
 | AI Function Builder | 250 | Use ai_query() in a SQL statement |
 | Vector Search Pioneer | 200 | Create a Vector Search index |
-| MLflow Experimenter | 150 | Log 10+ MLflow experiment runs |
+| MLflow Experimenter | 150 | Log 10+ MLflow models/runs to an experiment |
 
 ### Streaming
 | Mission | Points | What To Do |
 |---------|--------|------------|
-| Stream Starter | 250 | Run a Structured Streaming job for 24+ hours |
+| Stream Starter | 250 | Run a Structured Streaming job |
 
 ### Product usage (interactive)
 | Mission | Points | What To Do |
@@ -320,7 +320,7 @@ databricks-quest/
       components/
         Dashboard.tsx      # User dashboard with stats and badges
         Missions.tsx       # Mission grid with completion status
-        Leaderboard.tsx    # Top 10 with podium and swag prizes
+        Leaderboard.tsx    # Podium (top 3) + ranked list and weekly recognition
         AdminPanel.tsx     # Admin stats and pipeline health
       types.ts             # TypeScript interfaces
     package.json

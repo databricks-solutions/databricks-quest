@@ -36,6 +36,8 @@ export interface Mission {
   status: 'available' | 'completed'
   completed_at?: string
   doc_url?: string
+  learning_resources?: { label: string; url: string }[]
+  detection?: string
 }
 
 export interface LeaderboardEntry {

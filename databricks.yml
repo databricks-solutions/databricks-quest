@@ -59,7 +59,26 @@ resources:
         # (development mode rejects an UNPAUSED trigger-pause *preset*).
         pause_status: UNPAUSED
       tasks:
+        # Roll self-attested course ticks (Lakebase training_attestations) into the
+        # Delta training_completions feed BEFORE scoring reads it, so a tick is
+        # reconciled the same cycle instead of one cycle late. If this fails,
+        # run_scoring + sync are skipped (UPSTREAM_FAILED), so the sync's
+        # DELETE+reinsert never wipes the app's instant-write rows. No-ops when
+        # lakebase_host is unset.
+        - task_key: roundtrip_attestations
+          notebook_task:
+            notebook_path: ./notebooks/roundtrip_attestations.py
+            base_parameters:
+              quest_catalog: ${var.quest_catalog}
+              quest_schema: ${var.quest_schema}
+              lakebase_host: ${var.lakebase_host}
+              lakebase_db: ${var.lakebase_db}
+              app_name: databricks-quest
+            source: WORKSPACE
+          environment_key: default
         - task_key: run_scoring
+          depends_on:
+            - task_key: roundtrip_attestations
           notebook_task:
             notebook_path: ./notebooks/scoring_pipeline.py
             base_parameters:

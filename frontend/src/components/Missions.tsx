@@ -9,7 +9,7 @@ import { EmptyState, ErrorState, SkeletonCard } from './quest/States'
 
 type MissionsResponse = { missions: Mission[] }
 
-export default function Missions() {
+export default function Missions({ onProfileRefresh }: { onProfileRefresh?: () => void }) {
   const { data, loading, loaded, error, reload } = useApi<MissionsResponse>('/api/missions')
   const [filter, setFilter] = useState<string>('all')
   const [selected, setSelected] = useState<Mission | null>(null)
@@ -89,7 +89,14 @@ export default function Missions() {
         </div>
       )}
 
-      <MissionDrawer mission={selected} onClose={() => setSelected(null)} />
+      <MissionDrawer
+        mission={selected}
+        onClose={() => setSelected(null)}
+        onCompleted={() => {
+          reload()
+          onProfileRefresh?.()
+        }}
+      />
     </div>
   )
 }

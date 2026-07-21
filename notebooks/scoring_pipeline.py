@@ -1752,6 +1752,206 @@ print("Mission scored: Cross-Product Champion")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Step 2b: Score Get Started training missions (from the completions feed)
+# MAGIC Databricks Academy course completions do NOT live in Unity Catalog system
+# MAGIC tables — Academy is a separate platform. Completions reach Quest through the
+# MAGIC `training_completions` Delta feed, populated two ways:
+# MAGIC   - `self_attested` — a user ticked the course complete in the app (honor
+# MAGIC     system). The app ALSO writes the award to the serving tables immediately
+# MAGIC     for instant UX; this block RE-DERIVES the same rows idempotently so the
+# MAGIC     4-hourly rebuild never drops or double-counts a tick.
+# MAGIC   - `classroom` — instructor-led completions optionally landed by an admin export.
+# MAGIC
+# MAGIC Each Get Started course is one one-time mission (250 pts), matched on the
+# MAGIC course's id set (free self-paced id + instructor-led + language variants, so
+# MAGIC any edition counts once). A one-time "Databricks Learner" bonus (500 pts)
+# MAGIC fires once a user has completed 2+ DISTINCT Get Started courses.
+# MAGIC
+# MAGIC `user_id` in the feed MUST match the workspace identity Quest keys on (the
+# MAGIC user's email / `identity_metadata.run_as`). Academy is a separate login; if the
+# MAGIC emails don't match, points can't be awarded — the matched/dropped counts are
+# MAGIC logged below so a mismatch is diagnosable rather than silent.
+
+# COMMAND ----------
+
+# Create the completions feed table if it doesn't exist yet, so a deploy never
+# breaks when no feed has been landed. The 11 missions below simply stay unearned
+# until the table has classroom rows whose user_id matches a Quest user.
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {tbl('training_completions')} (
+  user_id STRING,
+  course_id STRING,
+  course_name STRING,
+  course_type STRING,
+  completed_at TIMESTAMP
+)
+USING DELTA
+""")
+
+# Canonical English "Get Started" ILT series. Each mission's course_ids list holds
+# the English course id PLUS its language-variant ids (all course_type='classroom'
+# in the Academy catalog), so every edition of a course maps to the same mission.
+# Verified live against customer-academy.databricks.com on 2026-07-16/17.
+GET_STARTED_COURSES = [
+    # course_ids include the instructor-led + language-variant ids AND the free
+    # self-paced id the tick-box attests against (first id in each list = the free
+    # self-paced course the mission's doc_url/link points at).
+    {"mission_id": "gs_data_engineering",      "mission_name": "Get Started: Data Engineering",      "course_ids": ["2469", "1511", "2438", "2439", "2496", "3908", "3933"]},
+    {"mission_id": "gs_machine_learning",      "mission_name": "Get Started: Machine Learning",      "course_ids": ["2460", "1512", "3518", "3519", "3521"]},
+    {"mission_id": "gs_generative_ai",         "mission_name": "Get Started: Generative AI",         "course_ids": ["2724", "3514", "3665", "3667", "3669", "3751"]},
+    {"mission_id": "gs_sql_analytics_bi",      "mission_name": "Get Started: SQL Analytics & BI",    "course_ids": ["3347", "1513", "3393", "3394", "3395", "3728", "3760"]},
+    {"mission_id": "gs_data_warehousing",      "mission_name": "Get Started: Data Warehousing",      "course_ids": ["3603", "3553", "4182", "4196", "4210"]},
+    {"mission_id": "gs_platform_admin",        "mission_name": "Get Started: Platform Administration", "course_ids": ["2453", "1509", "4471", "4499", "4535"]},
+    {"mission_id": "gs_data_governance",       "mission_name": "Get Started: Data Governance",       "course_ids": ["4677", "4653", "4829", "4831"]},
+    {"mission_id": "gs_lakebase",              "mission_name": "Get Started: Lakebase",              "course_ids": ["5081", "5082", "5400", "5448", "5454", "5673", "5674"]},
+    {"mission_id": "gs_lakehouse_architecture", "mission_name": "Get Started: Lakehouse Architecture", "course_ids": ["3509", "3532", "4276", "4292", "4298"]},
+    {"mission_id": "gs_ai_agents",             "mission_name": "Get Started: AI Agents",             "course_ids": ["4459"]},
+]
+GET_STARTED_POINTS = 250
+LEARNER_BONUS_POINTS = 500
+LEARNER_THRESHOLD = 2
+
+# All Get Started mission ids (the 10 courses + the Learner bonus). These belong to
+# the "Getting Started" category — used below to keep the Full Stack badge's
+# mission_id -> category map in sync with MISSION_DEFINITIONS in app/main.py.
+GET_STARTED_MISSION_IDS = [c["mission_id"] for c in GET_STARTED_COURSES] + ["databricks_learner"]
+
+# Scoring counts two kinds of completion rows:
+#   'classroom'     — instructor-led completions landed by an admin export
+#   'self_attested' — user ticked the course as complete in the app (honor system)
+# The app writes 'self_attested' rows AND the serving-table award directly (instant
+# UX); this reconciliation reproduces the same idempotent rows so the 4-hourly
+# rebuild never drops or double-counts a tick. SP-looking identities are swept
+# later, but we exclude them here too so the matched/dropped counts are honest.
+_TC_HUMAN = (
+    "user_id IS NOT NULL AND user_id != '' "
+    "AND user_id NOT LIKE '%service-principal%' "
+    "AND user_id NOT LIKE '%ServicePrincipal%'"
+)
+# completed_at must be present: a NULL timestamp becomes the completion/event
+# timestamp downstream, and since NULL != NULL in SQL, Step 3's user_points_fact
+# MERGE would treat every run as "not matched" and re-insert the points on every
+# 4-hourly run. Requiring a non-NULL timestamp keeps awards idempotent.
+_TC_CLASSROOM = f"course_type IN ('classroom', 'self_attested') AND completed_at IS NOT NULL AND {_TC_HUMAN}"
+
+# Diagnostics: how many feed users match a known Quest user vs. are dropped.
+try:
+    _feed_users = spark.sql(
+        f"SELECT COUNT(DISTINCT user_id) AS c FROM {tbl('training_completions')} WHERE {_TC_CLASSROOM}"
+    ).first()["c"]
+    _matched_users = spark.sql(f"""
+        SELECT COUNT(DISTINCT tc.user_id) AS c
+        FROM {tbl('training_completions')} tc
+        WHERE {_TC_CLASSROOM}
+          AND tc.user_id IN (SELECT DISTINCT user_id FROM {tbl('mission_completions')})
+    """).first()["c"]
+    print(
+        f"Training feed: {_feed_users} classroom user(s); "
+        f"{_matched_users} already known to Quest, "
+        f"{_feed_users - _matched_users} not yet seen elsewhere "
+        f"(they still score training missions; they just have no other activity yet)."
+    )
+    # The service-principal sweep later DELETEs any row whose user_id doesn't look
+    # like an email (NOT LIKE '%@%'). A feed that uses Academy usernames instead of
+    # workspace emails would score here and then be silently swept. Warn loudly so
+    # an identity-format mismatch is obvious rather than a silent zero.
+    _bad_id_users = spark.sql(
+        f"SELECT COUNT(DISTINCT user_id) AS c FROM {tbl('training_completions')} "
+        f"WHERE {_TC_CLASSROOM} AND user_id NOT LIKE '%@%'"
+    ).first()["c"]
+    if _bad_id_users:
+        print(
+            f"  WARNING: {_bad_id_users} training feed user(s) have a non-email user_id "
+            f"(no '@'). Their training points will be scored and then REMOVED by the "
+            f"service-principal sweep. The feed's user_id must be the workspace email."
+        )
+except Exception as _e:
+    print(f"Training feed diagnostics skipped: {_e}")
+
+# One MERGE per Get Started course. completed_at = earliest completion for that
+# user across any edition of the course. Idempotent on (user_id, mission_id).
+for _course in GET_STARTED_COURSES:
+    _ids_in = ", ".join(f"'{c}'" for c in _course["course_ids"])
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_id,
+        '{_course["mission_id"]}' AS mission_id,
+        '{_course["mission_name"]}' AS mission_name,
+        {GET_STARTED_POINTS} AS points_awarded,
+        MIN(completed_at) AS completed_at,
+        CAST(MIN(completed_at) AS DATE) AS period_start,
+        CAST(MIN(completed_at) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM {tbl('training_completions')}
+      WHERE {_TC_CLASSROOM}
+        AND course_id IN ({_ids_in})
+      GROUP BY user_id
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print(f"Mission scored: {_course['mission_name']}")
+
+# Databricks Learner bonus: 2+ DISTINCT Get Started courses completed. Distinctness
+# is by mission_id (i.e. by course), so two language-variant rows of the SAME course
+# count as one. completed_at = the moment the 2nd distinct course was completed.
+_learner_when = "\n            ".join(
+    f"WHEN course_id IN ({', '.join(repr(c) for c in _c['course_ids'])}) THEN '{_c['mission_id']}'"
+    for _c in GET_STARTED_COURSES
+)
+spark.sql(f"""
+MERGE INTO {tbl('mission_completions')} AS target
+USING (
+  SELECT
+    user_id,
+    'databricks_learner' AS mission_id,
+    'Databricks Learner' AS mission_name,
+    {LEARNER_BONUS_POINTS} AS points_awarded,
+    CAST(nth_completion AS TIMESTAMP) AS completed_at,
+    CAST(nth_completion AS DATE) AS period_start,
+    CAST(nth_completion AS DATE) AS period_end,
+    CAST('{NOW}' AS TIMESTAMP) AS scored_at
+  FROM (
+    SELECT
+      user_id,
+      COUNT(*) AS distinct_courses,
+      -- the completion date of the Nth (threshold-th) distinct course. Use
+      -- try_element_at (1-indexed) NOT the [] subscript: Spark evaluates this
+      -- projection for EVERY group before HAVING prunes, so a user with a single
+      -- Get Started course yields a 1-element array and a fixed [LEARNER_THRESHOLD-1]
+      -- subscript throws INVALID_ARRAY_INDEX, failing the whole scoring run.
+      -- try_element_at returns NULL out-of-range; the HAVING below then drops those
+      -- sub-threshold users, so qualifying rows always have a non-NULL nth_completion.
+      try_element_at(SORT_ARRAY(COLLECT_LIST(first_completed_at)), {LEARNER_THRESHOLD}) AS nth_completion
+    FROM (
+      SELECT
+        user_id,
+        CASE
+            {_learner_when}
+        END AS course_mission_id,
+        MIN(completed_at) AS first_completed_at
+      FROM {tbl('training_completions')}
+      WHERE {_TC_CLASSROOM}
+      GROUP BY user_id,
+        CASE
+            {_learner_when}
+        END
+    )
+    WHERE course_mission_id IS NOT NULL
+    GROUP BY user_id
+    HAVING COUNT(*) >= {LEARNER_THRESHOLD}
+  )
+) AS source
+ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+WHEN NOT MATCHED THEN INSERT *
+""")
+print("Mission scored: Databricks Learner (bonus)")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Step 3: Generate User Points Fact Table
 # MAGIC Consolidate all mission completions into the points fact table.
 
@@ -2211,7 +2411,7 @@ USING (
     SELECT
       user_id,
       CASE
-        WHEN mission_id = 'first_steps' THEN 'Getting Started'
+        WHEN mission_id IN ('first_steps', {", ".join(f"'{m}'" for m in GET_STARTED_MISSION_IDS)}) THEN 'Getting Started'
         WHEN mission_id IN ('job_creator','pipeline_builder','pipeline_runner','scheduler','auto_loader_pioneer','multi_task_orchestrator','liquid_clustering') THEN 'Data Engineering'
         WHEN mission_id IN ('genie_creator','genie_explorer','genie_curator','genie_power_user','dashboard_designer','dashboard_viewer','dashboard_publisher','dashboard_operator','data_explorer','power_analyst','query_author','alert_creator','app_builder','notebook_author','sql_analyst') THEN 'Analytics'
         WHEN mission_id IN ('genie_code_user','model_deployer','ai_function_builder','vector_search_pioneer','mlflow_experimenter','ml_practitioner') THEN 'AI / ML'

@@ -83,7 +83,7 @@ def check(name, cond):
     print(f"  ok: {name}")
 
 
-# 1. THE DEAD-LAKEBASE CASE: Lakebase dead, switch to warehouse must succeed via Delta.
+# 1. THE YOUI CASE: Lakebase dead, switch to warehouse must succeed via Delta.
 reset(lb_up=False)
 check("switch to warehouse with Lakebase down", db.set_data_backend("warehouse") == "warehouse")
 check("delta row persisted", fake_wh.delta_row == "warehouse")

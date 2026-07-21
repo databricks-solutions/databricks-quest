@@ -1255,6 +1255,13 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP
 );
+-- Self-attested Get Started course completions (tick-box). Durable record that the
+-- scoring rebuild never truncates; lakebase_sync.py rolls it into the Delta
+-- training_completions table each cycle for reconciliation. One row per user+course.
+CREATE TABLE IF NOT EXISTS training_attestations (
+  user_id TEXT, course_mission_id TEXT, course_id TEXT, attested_at TIMESTAMP,
+  UNIQUE (user_id, course_mission_id)
+);
 CREATE INDEX IF NOT EXISTS idx_mc_user ON mission_completions(user_id);
 CREATE INDEX IF NOT EXISTS idx_lb_rank ON leaderboard(all_time_rank);
 CREATE INDEX IF NOT EXISTS idx_ups_user ON user_profile_snapshot(user_id);

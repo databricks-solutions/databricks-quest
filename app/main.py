@@ -141,9 +141,33 @@ if config.is_child():
 # page. When adding a mission, link the most specific how-to page that exists.
 _DOCS = "https://docs.databricks.com/aws/en"
 
+# Databricks Academy course base. Each Get Started mission's `doc_url` points at
+# the FREE self-paced course a user takes; `learning_resources` links the same free
+# course. Points are self-attested via a tick-box (POST /api/training/attest) — see
+# the tick-box revision in the design doc. All course ids/slugs verified live and
+# confirmed FREE (price 0) against customer-academy.databricks.com on 2026-07-17.
+_ACAD = "https://customer-academy.databricks.com/learn/courses"
+
 MISSION_DEFINITIONS = [
     # --- Getting Started ---
     {"id": "first_steps", "name": "First Steps", "description": "Record your first Databricks usage", "points": 25, "category": "Getting Started", "award_type": "one_time", "icon": "rocket", "doc_url": f"{_DOCS}/getting-started/free-edition"},
+    # --- Getting Started: Databricks Academy "Get Started" training series ---
+    # Self-attested via the tick-box: a user confirms course completion, the app
+    # writes it to the training_completions feed + serving tables (250 pts each),
+    # and the scoring pipeline reconciles idempotently. Databricks Learner bonus
+    # fires at 2+ distinct Get Started courses. All courses are FREE & self-paced.
+    {"id": "gs_data_engineering", "name": "Get Started: Data Engineering", "description": "Complete the free Get Started with Databricks for Data Engineering self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "git-branch", "detection": "training", "doc_url": f"{_ACAD}/2469/get-started-with-databricks-for-data-engineering", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/2469/get-started-with-databricks-for-data-engineering"}]},
+    {"id": "gs_machine_learning", "name": "Get Started: Machine Learning", "description": "Complete the free Get Started with Databricks for Machine Learning self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "brain", "detection": "training", "doc_url": f"{_ACAD}/2460/get-started-with-databricks-for-machine-learning", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/2460/get-started-with-databricks-for-machine-learning"}]},
+    {"id": "gs_generative_ai", "name": "Get Started: Generative AI", "description": "Complete the free Get Started with Databricks for Generative AI self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "sparkles", "detection": "training", "doc_url": f"{_ACAD}/2724/get-started-with-databricks-for-generative-ai", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/2724/get-started-with-databricks-for-generative-ai"}]},
+    {"id": "gs_sql_analytics_bi", "name": "Get Started: SQL Analytics & BI", "description": "Complete the free Get Started with SQL Analytics and BI on Databricks self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "bar-chart-2", "detection": "training", "doc_url": f"{_ACAD}/3347/get-started-with-sql-analytics-and-bi-on-databricks", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/3347/get-started-with-sql-analytics-and-bi-on-databricks"}]},
+    {"id": "gs_data_warehousing", "name": "Get Started: Data Warehousing", "description": "Complete the free Get Started with Databricks for Data Warehousing self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "database", "detection": "training", "doc_url": f"{_ACAD}/3603/get-started-with-databricks-for-data-warehousing", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/3603/get-started-with-databricks-for-data-warehousing"}]},
+    {"id": "gs_platform_admin", "name": "Get Started: Platform Administration", "description": "Complete the free Get Started with Databricks Platform Administration self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "cpu", "detection": "training", "doc_url": f"{_ACAD}/2453/get-started-with-databricks-platform-administration", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/2453/get-started-with-databricks-platform-administration"}]},
+    {"id": "gs_data_governance", "name": "Get Started: Data Governance", "description": "Complete the free Get Started with Data Governance on Databricks self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "share", "detection": "training", "doc_url": f"{_ACAD}/4677/get-started-with-data-governance-on-databricks", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/4677/get-started-with-data-governance-on-databricks"}]},
+    {"id": "gs_lakebase", "name": "Get Started: Lakebase", "description": "Complete the free Get Started with Lakebase self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "database", "detection": "training", "doc_url": f"{_ACAD}/5081/get-started-with-lakebase", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/5081/get-started-with-lakebase"}]},
+    {"id": "gs_lakehouse_architecture", "name": "Get Started: Lakehouse Architecture", "description": "Complete the free Get Started with Lakehouse Architecture on Databricks self-paced course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "layers", "detection": "training", "doc_url": f"{_ACAD}/3509/get-started-with-lakehouse-architecture-on-databricks", "learning_resources": [{"label": "Free self-paced course (2 hrs)", "url": f"{_ACAD}/3509/get-started-with-lakehouse-architecture-on-databricks"}]},
+    # AI Agents has no FREE self-paced edition in the catalog; its instructor-led course is free (price 0), so link that.
+    {"id": "gs_ai_agents", "name": "Get Started: AI Agents", "description": "Complete the free Get Started with AI Agents on Databricks course (2 hrs)", "points": 250, "category": "Getting Started", "award_type": "one_time", "icon": "zap", "detection": "training", "doc_url": f"{_ACAD}/4459/get-started-with-ai-agents-on-databricks", "learning_resources": [{"label": "Free course (2 hrs)", "url": f"{_ACAD}/4459/get-started-with-ai-agents-on-databricks"}]},
+    {"id": "databricks_learner", "name": "Databricks Learner", "description": "Complete 2 or more Get Started courses to be recognized as a Databricks learner", "points": 500, "category": "Getting Started", "award_type": "one_time", "icon": "award", "detection": "training", "doc_url": "https://www.databricks.com/learn/training/home"},
     # --- Data Engineering ---
     {"id": "job_creator", "name": "Job Creator", "description": "Create your first Lakeflow Job", "points": 100, "category": "Data Engineering", "award_type": "one_time", "icon": "briefcase", "doc_url": f"{_DOCS}/jobs/create-run-jobs"},
     {"id": "pipeline_builder", "name": "Pipeline Builder", "description": "Create your first Lakeflow Spark Declarative Pipeline", "points": 150, "category": "Data Engineering", "award_type": "one_time", "icon": "git-branch", "doc_url": f"{_DOCS}/ldp/"},
@@ -614,6 +638,216 @@ async def get_missions(request: Request):
         else:
             m["status"] = "available"
     return {"missions": missions, "user_id": user}
+
+
+# --- Get Started training: self-attested course completion (tick-box) --------
+# The 10 Get Started course missions are self-reported: a user ticks a course and
+# confirms, and points are awarded immediately. Durability across the 4-hourly
+# scoring rebuild is handled by ALSO appending to the training_completions feed,
+# which scoring_pipeline.py Step 2b re-derives idempotently (same mission_id, same
+# award) so a tick is never dropped or double-counted.
+_TRAINING_MISSIONS = {m["id"]: m for m in MISSION_DEFINITIONS if m.get("detection") == "training"}
+# The free self-paced course id the tick attests against == the first path segment
+# of each mission's doc_url (…/courses/<id>/<slug>).
+def _course_id_for(mission: dict) -> str:
+    try:
+        return mission["doc_url"].split("/courses/")[1].split("/")[0]
+    except (KeyError, IndexError):
+        return ""
+
+
+class AttestPayload(BaseModel):
+    course_mission_id: str
+
+
+@app.post("/api/training/attest")
+async def attest_training(payload: AttestPayload, request: Request):
+    """Self-attest completion of a Get Started course. Awards points instantly and
+    records the attestation in the durable feed. Idempotent; Lakebase-only."""
+    user = get_user_email(request)
+    mission = _TRAINING_MISSIONS.get(payload.course_mission_id)
+    if mission is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "UNKNOWN_MISSION", "message": "Not a Get Started training mission."}},
+        )
+    # Writes require the Lakebase backend; the warehouse backend is read-only.
+    if db.warehouse_backend():
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "WAREHOUSE_READ_ONLY",
+                              "message": "Self-reporting course completions requires the Lakebase data backend. "
+                                         "Ask an admin to switch the backend in Admin settings."}},
+        )
+
+    mission_id = mission["id"]
+    points = int(mission["points"])
+    mission_name = mission["name"]
+    course_id = _course_id_for(mission)
+    display_name = user.split("@")[0] if "@" in user else user
+
+    # The Databricks Learner bonus is DERIVED (awarded automatically at >= 2 completed
+    # courses), not a course a user can tick. It has no Academy course id, so a direct
+    # attest would write it into training_attestations with course_id='' — which never
+    # matches any course in scoring, so its points would be wiped on the next sync and
+    # never re-derived. Reject direct attest of the bonus (or any training mission
+    # missing a course id) so it can only ever be earned through the derived path.
+    if mission_id == "databricks_learner" or not course_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "NOT_ATTESTABLE",
+                              "message": "This reward is earned automatically, not self-reported."}},
+        )
+
+    try:
+        already = execute_query(
+            "SELECT 1 AS ok FROM mission_completions WHERE user_id = %s AND mission_id = %s",
+            (user, mission_id),
+        )
+        newly_awarded = []  # (mission_id, mission_name, points) written this call
+
+        with db.transaction() as cur:
+            # 1) durable record → training_attestations (Lakebase). This table is
+            #    NEVER truncated by the scoring rebuild; the roundtrip_attestations
+            #    job task rolls it into Delta training_completions each cycle so
+            #    scoring reconciles it. Idempotent on (user_id, course_mission_id).
+            cur.execute(
+                "INSERT INTO training_attestations (user_id, course_mission_id, course_id, attested_at) "
+                "VALUES (%s, %s, %s, now()) "
+                "ON CONFLICT (user_id, course_mission_id) DO NOTHING",
+                (user, mission_id, course_id),
+            )
+            # rowcount == 0 means this course was already attested by this user on a
+            # prior call. training_attestations is never truncated, so this is the
+            # DURABLE idempotency signal: gate the instant award on it so a re-tick
+            # can't double-credit points even if the scoring rebuild has transiently
+            # cleared the (unconstrained) mission_completions serving row.
+            newly_attested = cur.rowcount == 1
+
+            # 2) instant serving award — only for a genuinely new tick that isn't
+            #    already completed (one-time).
+            if newly_attested and not already:
+                _award_mission_tx(cur, user, mission_id, mission_name, points)
+                newly_awarded.append((mission_id, mission_name, points))
+
+                # 3) Databricks Learner bonus at >= 2 distinct completed Get Started courses
+                learner = _TRAINING_MISSIONS.get("databricks_learner")
+                if learner:
+                    cur.execute(
+                        "SELECT COUNT(*) AS c FROM mission_completions "
+                        "WHERE user_id = %s AND mission_id IN %s",
+                        (user, tuple(mid for mid in _TRAINING_MISSIONS if mid != "databricks_learner")),
+                    )
+                    distinct_done = cur.fetchone()[0]
+                    cur.execute(
+                        "SELECT 1 FROM mission_completions WHERE user_id = %s AND mission_id = 'databricks_learner'",
+                        (user,),
+                    )
+                    has_learner = cur.fetchone() is not None
+                    if distinct_done >= 2 and not has_learner:
+                        lpts = int(learner["points"])
+                        _award_mission_tx(cur, user, "databricks_learner", learner["name"], lpts)
+                        newly_awarded.append(("databricks_learner", learner["name"], lpts))
+
+            # 4) roll the awarded points into this user's profile + leaderboard rows
+            total_new = sum(p for _, _, p in newly_awarded)
+            if total_new:
+                _bump_user_totals_tx(cur, user, display_name, total_new, len(newly_awarded))
+
+        new_total = _current_total_points(user)
+        return {
+            "ok": True,
+            "mission_id": mission_id,
+            "status": "completed",
+            "awarded": [{"mission_id": m, "name": n, "points": p} for m, n, p in newly_awarded],
+            "points_added": sum(p for _, _, p in newly_awarded),
+            "total_points": new_total,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("attest_training failed for %s / %s: %s", user, payload.course_mission_id, e)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "ATTEST_FAILED", "message": "Could not record completion. Try again."}},
+        )
+
+
+def _award_mission_tx(cur, user: str, mission_id: str, mission_name: str, points: int) -> None:
+    """Insert a one-time completion + its points-fact row inside a transaction.
+
+    The base serving-table DDL (deploy.sh) has NO unique constraint on
+    mission_completions/user_points_fact — the scoring pipeline keeps them clean by
+    full DELETE+reinsert, not upserts. So we cannot use ON CONFLICT here; instead
+    each INSERT is guarded by WHERE NOT EXISTS so a retry (or a caller that already
+    checked) never writes a duplicate completion or double-credits the points.
+    """
+    now_ts = datetime.utcnow()
+    cur.execute(
+        "INSERT INTO mission_completions "
+        "(user_id, mission_id, mission_name, points_awarded, completed_at, period_start, period_end, scored_at) "
+        "SELECT %s, %s, %s, %s, %s, %s, %s, %s "
+        "WHERE NOT EXISTS (SELECT 1 FROM mission_completions WHERE user_id = %s AND mission_id = %s)",
+        (user, mission_id, mission_name, points, now_ts, now_ts.date(), now_ts.date(), now_ts, user, mission_id),
+    )
+    cur.execute(
+        "INSERT INTO user_points_fact (user_id, event_type, mission_id, points, reason, event_timestamp, scored_at) "
+        "SELECT %s, 'mission_completion', %s, %s, %s, %s, %s "
+        "WHERE NOT EXISTS (SELECT 1 FROM user_points_fact WHERE user_id = %s AND mission_id = %s AND event_type = 'mission_completion')",
+        (user, mission_id, points, f"Completed mission: {mission_name}", now_ts, now_ts, user, mission_id),
+    )
+
+
+def _bump_user_totals_tx(cur, user: str, display_name: str, added_points: int, added_missions: int = 1) -> None:
+    """Increment the user's total on profile + leaderboard so points show instantly.
+    `added_missions` is the number of missions completed in this call (a course tick
+    plus the Learner bonus = 2), so missions_completed doesn't undercount. Ranks stay
+    approximate until the next scoring run recomputes them globally."""
+    now_ts = datetime.utcnow()
+    # profile snapshot
+    cur.execute("SELECT total_points FROM user_profile_snapshot WHERE user_id = %s", (user,))
+    row = cur.fetchone()
+    if row:
+        new_total = int(row[0] or 0) + added_points
+        cur.execute(
+            "UPDATE user_profile_snapshot SET total_points = %s, level = %s, "
+            "missions_completed = COALESCE(missions_completed, 0) + %s, updated_at = %s WHERE user_id = %s",
+            (new_total, get_level(new_total), added_missions, now_ts, user),
+        )
+    else:
+        new_total = added_points
+        cur.execute(
+            "INSERT INTO user_profile_snapshot "
+            "(user_id, display_name, total_points, level, current_streak, max_streak, badge_count, "
+            "missions_completed, distinct_products_used, updated_at) "
+            "VALUES (%s, %s, %s, %s, 0, 0, 0, %s, 0, %s)",
+            (user, display_name, new_total, get_level(new_total), added_missions, now_ts),
+        )
+    # leaderboard row (weekly/monthly also credited; ranks fixed on next scoring run)
+    cur.execute("SELECT total_points FROM leaderboard WHERE user_id = %s", (user,))
+    lrow = cur.fetchone()
+    if lrow:
+        lt = int(lrow[0] or 0) + added_points
+        cur.execute(
+            "UPDATE leaderboard SET total_points = %s, weekly_points = COALESCE(weekly_points,0) + %s, "
+            "monthly_points = COALESCE(monthly_points,0) + %s, level = %s, updated_at = %s WHERE user_id = %s",
+            (lt, added_points, added_points, get_level(lt), now_ts, user),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO leaderboard "
+            "(user_id, display_name, total_points, weekly_points, monthly_points, level, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user, display_name, added_points, added_points, added_points, get_level(added_points), now_ts),
+        )
+
+
+def _current_total_points(user: str) -> int:
+    try:
+        rows = execute_query("SELECT total_points FROM user_profile_snapshot WHERE user_id = %s", (user,))
+        return int(rows[0]["total_points"]) if rows else 0
+    except Exception:
+        return 0
 
 
 @app.get("/api/leaderboard")

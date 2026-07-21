@@ -563,6 +563,9 @@ Once children are deployed and an event exists, the host works from the master:
 The same panels are available in the master's **Host Console** UI; children see
 the event-wide leaderboard and their own team's rank in their **Event** tab.
 
+Full operator runbook:
+[`docs/10_EVENT_OPERATIONS_PLAYBOOK.md`](docs/10_EVENT_OPERATIONS_PLAYBOOK.md).
+
 ---
 
 ## Testing
@@ -610,4 +613,5 @@ pytest tests/          # federation unit tests
 - Data model: [`docs/07_DATA_MODEL.md`](docs/07_DATA_MODEL.md)
 - API contract: [`docs/08_API_CONTRACT.md`](docs/08_API_CONTRACT.md)
 - Quest model + validation engine: [`docs/06_QUEST_MODEL_AND_VALIDATION_ENGINE.md`](docs/06_QUEST_MODEL_AND_VALIDATION_ENGINE.md)
+- PR sequence: [`docs/13_PR_ALIGNED_SPRINT_PLAN.md`](docs/13_PR_ALIGNED_SPRINT_PLAN.md)
 - Federation decision: [`adr/ADR_006_SHARED_LAKEBASE_MULTI_WORKSPACE_FEDERATION.md`](adr/ADR_006_SHARED_LAKEBASE_MULTI_WORKSPACE_FEDERATION.md)

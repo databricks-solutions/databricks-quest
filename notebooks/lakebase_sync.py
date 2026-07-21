@@ -81,6 +81,13 @@ conn = psycopg2.connect(
 )
 conn.autocommit = False
 
+# NOTE: the self-attestation round-trip (Lakebase training_attestations -> Delta
+# training_completions) used to live here, but that ran AFTER run_scoring had already
+# read the feed — so a tick reached scoring one cycle late and this task's
+# DELETE+reinsert wiped the app's instant-write serving rows in the meantime. It now
+# runs as the FIRST job task (roundtrip_attestations.py), before run_scoring, so ticks
+# are reconciled the same cycle. See that notebook for the full rationale.
+
 synced, skipped = 0, []
 try:
     for table, cols in TABLES:

@@ -66,7 +66,7 @@ The fastest way to get running. One script handles authentication, warehouse sel
 ### Step 1: Clone and run
 
 ```bash
-git clone https://github.com/databricks-solutions/databricks-quest.git
+git clone https://github.com/deepbasu123/databricks-quest.git
 cd databricks-quest
 ./deploy.sh
 ```
@@ -161,7 +161,7 @@ This opens your browser for OAuth login. After authenticating, the CLI saves a p
 ### Step 3: Clone the repo
 
 ```bash
-git clone https://github.com/databricks-solutions/databricks-quest.git
+git clone https://github.com/deepbasu123/databricks-quest.git
 cd databricks-quest
 ```
 

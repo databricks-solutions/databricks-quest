@@ -362,7 +362,22 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);
 
 
 #: Lakebase tables the app writes to at runtime, not just reads.
-APP_WRITABLE_TABLES = ("app_settings", "training_attestations")
+#: - app_settings: the Admin data-backend toggle upserts here.
+#: - training_attestations: the Get Started tick-box records a course here.
+#: - mission_completions, user_points_fact, user_profile_snapshot, leaderboard:
+#:   the tick-box's instant award writes these in the SAME atomic transaction
+#:   (_award_mission_tx + _bump_user_totals_tx). deploy.sh reaches them through
+#:   DATABRICKS_SUPERUSER membership, which deploy.py drops on purpose (it fails
+#:   silently on some workspaces), so they must be granted explicitly here or the
+#:   whole attest transaction rolls back with a permission error (a 503 tick-box).
+APP_WRITABLE_TABLES = (
+    "app_settings",
+    "training_attestations",
+    "mission_completions",
+    "user_points_fact",
+    "user_profile_snapshot",
+    "leaderboard",
+)
 
 
 def lakebase_grant_statements(sp: str) -> List[str]:

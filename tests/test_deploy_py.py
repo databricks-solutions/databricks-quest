@@ -184,9 +184,34 @@ def test_lakebase_grant_statements_include_write_path():
     assert "ALTER DEFAULT PRIVILEGES IN SCHEMA public" in joined
     assert 'GRANT CREATE ON SCHEMA public TO "1234-sp"' in joined
     # Explicit writes on every table the app writes at runtime: the backend
-    # toggle and the course-tick record.
-    for table in ("app_settings", "training_attestations"):
+    # toggle, the course-tick record, and the four instant-award serving tables.
+    for table in (
+        "app_settings",
+        "training_attestations",
+        "mission_completions",
+        "user_points_fact",
+        "user_profile_snapshot",
+        "leaderboard",
+    ):
         assert f'GRANT SELECT, INSERT, UPDATE ON {table} TO "1234-sp"' in joined
+
+
+def test_lakebase_grants_cover_the_instant_award_transaction():
+    # The /api/training/attest handler runs one atomic transaction that writes
+    # training_attestations AND the four serving tables the instant award touches
+    # (mission_completions + user_points_fact via _award_mission_tx, then
+    # user_profile_snapshot + leaderboard via _bump_user_totals_tx). deploy.py
+    # drops deploy.sh's DATABRICKS_SUPERUSER membership, so if any of these lacks
+    # an explicit write grant the whole transaction rolls back with a permission
+    # error and the tick-box 503s. Guard every table the award path writes.
+    award_tables = {
+        "training_attestations",
+        "mission_completions",
+        "user_points_fact",
+        "user_profile_snapshot",
+        "leaderboard",
+    }
+    assert award_tables.issubset(set(deploy.APP_WRITABLE_TABLES))
 
 
 def test_sp_role_conflict_on_redeploy_is_silent(capsys, monkeypatch):

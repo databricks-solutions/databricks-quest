@@ -45,16 +45,16 @@ No separate accounts needed. Users log in with their workspace credentials.
 
 ## Deploy
 
-Full instructions: **[SETUP.md](SETUP.md)** -- covers three deployment methods:
+Full instructions: **[SETUP.md](SETUP.md)** -- covers four deployment methods:
 
 | Method | Best For | Time |
 |--------|----------|------|
-| **Scripted** (`./deploy.sh`) | Most users | ~15 min |
+| **Scripted** (`./deploy.sh`) | Most users on macOS/Linux | ~15 min |
+| **Python** (`python deploy.py`) | Windows / anywhere without bash or psql | ~5 min |
 | **Manual** (step-by-step) | Full control, restricted environments | ~30 min |
 | **Quick** (`./deploy.sh --quick`) | Fast testing without DAB | ~10 min |
-| **Python** (`python deploy.py`) | Windows / cross-platform (no bash) | ~15 min |
 
-On Windows or any OS without bash, `python deploy.py --catalog <name> --data-backend warehouse` runs the whole deploy via the Databricks SDK. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
+On Windows or any OS without bash, `python deploy.py --catalog <name> --data-backend warehouse` runs the whole deploy through the Databricks SDK: no bash, no `psql`, no Terraform. It covers Adoption Mode; Event Mode still needs `deploy.sh`. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
 Quick start:
 

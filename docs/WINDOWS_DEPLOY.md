@@ -17,8 +17,7 @@ macOS, and Linux.
   pip install databricks-sdk psycopg2-binary PyYAML
   ```
   (These are the same packages Quest's app uses. `psycopg2-binary` is a wheel —
-  no PostgreSQL install needed. Lakebase mode needs a recent `databricks-sdk`;
-  see the note under "Data backend" below.)
+  no PostgreSQL install needed.)
 
 ## Authenticate
 
@@ -50,20 +49,34 @@ python deploy.py --catalog quest_data --data-backend warehouse
 
 That runs the full flow: auth check, warehouse select/create, catalog + schema
 + `app_settings`, upload app + notebooks, create the app, deploy it, grant the
-app's service principal access, run the scoring pipeline, and create the
-4-hourly scheduled job. It prints the app URL at the end.
+app's service principal access, create the 4-hourly scoring job, and start the
+first run. It prints the app URL at the end and takes roughly 5 minutes.
+
+Re-running the same command is safe. It reuses the app, the warehouse, the
+catalog, and the Lakebase instance, and updates the existing scoring job rather
+than creating a second one. The update is partial, so tags, notifications, or
+timeouts you added to the job by hand survive.
+
+Pick one deploy tool per app and stay with it. The scoring job is named
+`[Quest] Scoring Pipeline (<app-name>)`, which at the default app name is the
+same name `deploy.sh` gives its bundle-managed job. If `deploy.py` finds a job
+that a Databricks Asset Bundle owns, it leaves it alone and says so rather than
+rewriting it behind the bundle's back; pass a different `--app-name` if you
+want the two to coexist.
 
 ### Data backend
 
-- `--data-backend warehouse` — the app reads scored Delta tables through a SQL
-  warehouse. No Lakebase, no Postgres. **Works with the SDK version Quest pins**
-  and is the recommended starting point on Windows.
+- `--data-backend warehouse` — the app reads the scored Delta tables through a
+  SQL warehouse. No Lakebase, no Postgres, nothing to sync. This is the
+  recommended starting point.
 - `--data-backend lakebase` (the default) — provisions a Lakebase Postgres
-  instance for sub-second reads. This path needs a **newer `databricks-sdk`
-  than the version pinned in `app/requirements.txt`** (the Lakebase credential
-  API is not in the pinned release). If you want Lakebase, first run
-  `pip install -U databricks-sdk`. If the SDK is too old, `deploy.py` stops with
-  a clear message rather than failing halfway.
+  instance for sub-second reads. The scoring job then copies Delta into Lakebase
+  after every run. Provisioning the instance adds about 5 minutes to the first
+  deploy.
+
+Either way an admin can flip the live backend later under **Admin → Data
+Backend** without redeploying, which is why the deploy always wires up a
+warehouse and the catalog.
 
 ## Flags
 
@@ -77,23 +90,38 @@ app's service principal access, run the scoring pipeline, and create the
 | `--warehouse-id ID` | Use this warehouse ID (skips lookup) | auto |
 | `--admins a@b.com,c@d.com` | Seed Admin-page admins | deploying user |
 | `--profile NAME` | Databricks CLI profile | env/default |
-| `--skip-scoring` | Deploy without running scoring now | run it |
+| `--host URL` | Workspace URL, when no profile or env auth is set | env/default |
+| `--lakebase-host HOST` | Use an existing Lakebase endpoint (skips provisioning) | provision |
+| `--lakebase-db NAME` | Lakebase database name | `quest_db` |
+| `--skip-scoring` | Create the schedule but don't run scoring now | run it |
 | `--non-interactive` / `-y` | Never prompt (CI / unattended) | prompt |
+
+`deploy.py` covers Adoption Mode. Event Mode (GameDay quests, teams, host
+console, federation) is still deploy.sh-only — see
+[README_GAMEDAY.md](../README_GAMEDAY.md).
 
 ## What runs where
 
 - The **Quest app** runs on **Databricks Apps** (source-code runtime), not on
   your machine. `deploy.py` is a deploy tool that exits when the deploy
   finishes.
-- The **scoring job** runs in Databricks on its 4-hourly schedule.
+- The **scoring job** runs in Databricks every 4 hours. It has four tasks:
+  `roundtrip_attestations` → `run_scoring` → `sync_to_lakebase` and
+  `warm_warehouse`. The last two no-op for the backend you aren't using.
+- The app is empty until the first scoring run finishes, which usually takes
+  10-20 minutes. Watch it under **Workflows → [Quest] Scoring Pipeline**.
 
 ## Troubleshooting
 
-- **"generate_database_credential is unavailable in this databricks-sdk
-  version"** — you're deploying `--data-backend lakebase` with too old an SDK.
-  Either `pip install -U databricks-sdk`, or use `--data-backend warehouse`.
+- **"Could not create catalog"** — some metastores (accounts on Default
+  Storage) reject `CREATE CATALOG` without an explicit managed location. Create
+  the catalog in the UI, then re-run with `--catalog <that name>`. If the
+  catalog already exists, `deploy.py` never tries to create it.
 - **Auth errors** — confirm `databricks auth login` succeeded
   (`databricks current-user me`), or that `--profile` / `DATABRICKS_HOST` +
   `DATABRICKS_TOKEN` are set.
-- **No catalog** — the deploying identity needs permission to create the catalog,
-  or pre-create it and pass its name with `--catalog`.
+- **App shows zeros** — the first scoring run has not finished yet. Check the
+  job run, then reload.
+- **Old `databricks-sdk`** — the Lakebase API moved between SDK releases.
+  `deploy.py` handles both layouts, but if you see a Lakebase API error,
+  `pip install -U databricks-sdk` resolves it.

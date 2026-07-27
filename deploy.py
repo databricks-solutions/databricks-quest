@@ -16,7 +16,10 @@ Usage:
 Requirements:
     - Databricks CLI authenticated (``databricks auth login --host ...``) or
       DATABRICKS_HOST/DATABRICKS_TOKEN in the environment.
-    - Python 3.9+ with databricks-sdk and psycopg2-binary (see app/requirements.txt).
+    - Python 3.9+ with databricks-sdk and PyYAML. psycopg2-binary is needed only
+      for ``--data-backend lakebase``; it is a wheel, so no PostgreSQL install.
+    - Any databricks-sdk release works: the Lakebase API group moved from
+      ``w.database_instances`` to ``w.database`` in 0.56 and both are handled.
 """
 
 from __future__ import annotations
@@ -41,25 +44,47 @@ BOLD = "\033[1m" if _TTY else ""
 NC = "\033[0m" if _TTY else ""
 
 
+def _pick_glyphs() -> dict:
+    """Choose status markers stdout can actually encode.
+
+    Windows falls back to the locale codepage (cp1252/cp437) whenever stdout is
+    redirected to a file or pipe, and printing "✓" there raises
+    UnicodeEncodeError. Probe the real encoding once and drop to ASCII when the
+    Unicode markers would not survive.
+    """
+    fancy = {"ok": "\u2713", "warn": "\u26a0", "err": "\u2717", "info": "\u2192"}
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "".join(fancy.values()).encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return {"ok": "[OK]", "warn": "[!]", "err": "[X]", "info": "->"}
+    return fancy
+
+
+GLYPH = _pick_glyphs()
+
+
 # ── Logging helpers (staged output, mirrors install_lakemeter.py) ─────────────
+# flush=True throughout: stdout is block-buffered when piped or redirected, and a
+# five-minute deploy that prints nothing until it exits looks hung in CI logs.
 def log_step(step: int, total: int, msg: str) -> None:
-    print(f"\n{YELLOW}[{step}/{total}]{NC} {BOLD}{msg}{NC}")
+    print(f"\n{YELLOW}[{step}/{total}]{NC} {BOLD}{msg}{NC}", flush=True)
 
 
 def log_ok(msg: str) -> None:
-    print(f"  {GREEN}✓{NC} {msg}")
+    print(f"  {GREEN}{GLYPH['ok']}{NC} {msg}", flush=True)
 
 
 def log_warn(msg: str) -> None:
-    print(f"  {YELLOW}⚠{NC} {msg}")
+    print(f"  {YELLOW}{GLYPH['warn']}{NC} {msg}", flush=True)
 
 
 def log_err(msg: str) -> None:
-    print(f"  {RED}✗{NC} {msg}")
+    print(f"  {RED}{GLYPH['err']}{NC} {msg}", flush=True)
 
 
 def log_info(msg: str) -> None:
-    print(f"  {BLUE}→{NC} {msg}")
+    print(f"  {BLUE}{GLYPH['info']}{NC} {msg}", flush=True)
 
 
 # ── Resolved options ──────────────────────────────────────────────────────────
@@ -80,7 +105,6 @@ class Config:
     lakebase_host: str = ""
     skip_scoring: bool = False
     non_interactive: bool = False
-    yes: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -135,14 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--non-interactive",
+        "-y",
         action="store_true",
         help="Never prompt; pick sensible defaults (for CI / customers).",
-    )
-    p.add_argument(
-        "-y",
-        "--yes",
-        action="store_true",
-        help="Assume yes for confirmation prompts.",
     )
     return p
 
@@ -163,7 +182,6 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         lakebase_host=args.lakebase_host,
         skip_scoring=args.skip_scoring,
         non_interactive=args.non_interactive,
-        yes=args.yes,
     )
 
 
@@ -223,20 +241,55 @@ def render_app_yaml(
 
 
 # ── SQL / DDL builders (pure) ─────────────────────────────────────────────────
-def uc_setup_statements(catalog: str, schema: str) -> List[str]:
-    """Unity Catalog setup: create the catalog, schema, and the Delta
-    ``app_settings`` table (pre-created as the deploying user so the app SP
-    never needs CREATE TABLE for the runtime backend toggle). Mirrors
-    deploy.sh ``grant_sp_warehouse_access`` + the Step-4 pre-flight.
+def uc_schema_statements(catalog: str, schema: str) -> List[str]:
+    """Schema plus the Delta ``app_settings`` table, assuming the catalog exists.
+
+    ``app_settings`` is pre-created as the deploying user so the app service
+    principal never needs CREATE TABLE for the runtime backend toggle.
     """
     return [
-        f"CREATE CATALOG IF NOT EXISTS {catalog}",
         f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}",
         (
             f"CREATE TABLE IF NOT EXISTS {catalog}.{schema}.app_settings "
             "(`key` STRING, value STRING, updated_at TIMESTAMP)"
         ),
     ]
+
+
+def is_missing_catalog_error(exc: Exception) -> bool:
+    """True when a statement failed only because the catalog does not exist."""
+    return "NO_SUCH_CATALOG" in str(exc).upper()
+
+
+def setup_unity_catalog(w, warehouse_id: str, catalog: str, schema: str) -> None:
+    """Create the Quest schema, creating the catalog first only if it is missing.
+
+    Schema-first mirrors deploy.sh. Most deploying identities have CREATE SCHEMA
+    on an existing catalog but not metastore-level CREATE CATALOG, and some
+    metastores (accounts on Default Storage) reject a bare ``CREATE CATALOG``
+    without an explicit MANAGED LOCATION. Attempting the catalog unconditionally
+    turns those perfectly valid setups into a hard failure.
+    """
+    try:
+        run_uc_statements(w, warehouse_id, uc_schema_statements(catalog, schema))
+        return
+    except RuntimeError as exc:
+        if not is_missing_catalog_error(exc):
+            raise
+
+    log_info(f"Catalog '{catalog}' not found -- creating it...")
+    try:
+        run_uc_statements(w, warehouse_id, [f"CREATE CATALOG IF NOT EXISTS {catalog}"])
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Could not create catalog '{catalog}'.\n"
+            f"    {exc}\n"
+            f"    Fix: create the catalog yourself (the UI handles Default Storage\n"
+            f"    accounts correctly), or re-run pointing --catalog at a catalog you\n"
+            f"    can already create schemas in."
+        ) from exc
+
+    run_uc_statements(w, warehouse_id, uc_schema_statements(catalog, schema))
 
 
 def uc_grant_statements(catalog: str, schema: str, sp: str) -> List[str]:
@@ -254,11 +307,14 @@ def uc_grant_statements(catalog: str, schema: str, sp: str) -> List[str]:
 
 
 def lakebase_ddl() -> str:
-    """The 6-table Lakebase schema, verbatim from SETUP.md Manual Deploy Step 10.
+    """The Lakebase schema the app and the scoring job both expect.
 
-    Tables: mission_completions, user_points_fact, user_profile_snapshot,
-    leaderboard, badges, notifications (+ their indexes). Idempotent via
-    IF NOT EXISTS so it is safe to re-run.
+    Six scored tables (mission_completions, user_points_fact,
+    user_profile_snapshot, leaderboard, badges, notifications) plus
+    ``app_settings`` for the runtime backend toggle and ``training_attestations``
+    for self-attested course ticks. The last one is not optional: the
+    ``roundtrip_attestations`` job task reads it on every run and the whole job
+    fails without it. Idempotent via IF NOT EXISTS so it is safe to re-run.
     """
     return """
 CREATE TABLE IF NOT EXISTS mission_completions (
@@ -287,6 +343,16 @@ CREATE TABLE IF NOT EXISTS notifications (
   id SERIAL PRIMARY KEY, user_id TEXT, notification_type TEXT, title TEXT,
   message TEXT, mission_id TEXT, points INT, created_at TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP
+);
+-- Self-attested Get Started course completions (the tick-box). Durable: the
+-- scoring rebuild never truncates it, and roundtrip_attestations rolls it into
+-- Delta each cycle. One row per user+course.
+CREATE TABLE IF NOT EXISTS training_attestations (
+  user_id TEXT, course_mission_id TEXT, course_id TEXT, attested_at TIMESTAMP,
+  UNIQUE (user_id, course_mission_id)
+);
 CREATE INDEX IF NOT EXISTS idx_mc_user ON mission_completions(user_id);
 CREATE INDEX IF NOT EXISTS idx_lb_rank ON leaderboard(all_time_rank);
 CREATE INDEX IF NOT EXISTS idx_ups_user ON user_profile_snapshot(user_id);
@@ -295,25 +361,32 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);
 """.strip()
 
 
-def lakebase_grant_statements(sp: str) -> List[str]:
-    """Postgres-side statements for the app SP, matching deploy.sh:250-256.
+#: Lakebase tables the app writes to at runtime, not just reads.
+APP_WRITABLE_TABLES = ("app_settings", "training_attestations")
 
-    Blanket read on existing tables plus a default-privilege so tables created
-    later are also readable, THEN the write path the runtime backend toggle needs
-    (deploy.sh:253-256): the ``app_settings`` table (created if missing), CREATE on
-    the ``public`` schema, and SELECT/INSERT/UPDATE on ``app_settings``. Without the
-    write grants the app cannot upsert the backend setting ("Could not persist the
-    backend setting"). Postgres identifiers are double-quoted (the SP client id
-    contains hyphens).
+
+def lakebase_grant_statements(sp: str) -> List[str]:
+    """Postgres-side grants for the app service principal.
+
+    Blanket read on existing tables plus a default privilege so tables created
+    later are also readable, CREATE on ``public`` so the app can make its own
+    tables, and explicit writes on the two tables the app actually writes:
+    ``app_settings`` (the backend toggle) and ``training_attestations`` (course
+    ticks). deploy.sh leaves the second one to DATABRICKS_SUPERUSER membership,
+    which its own comments note has failed silently on customer workspaces, so
+    grant it directly instead. Identifiers are double-quoted because the SP
+    client id contains hyphens.
     """
-    return [
+    stmts = [
         f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{sp}"',
         f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "{sp}"',
-        "CREATE TABLE IF NOT EXISTS app_settings "
-        "(key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP)",
         f'GRANT CREATE ON SCHEMA public TO "{sp}"',
-        f'GRANT SELECT, INSERT, UPDATE ON app_settings TO "{sp}"',
     ]
+    stmts += [
+        f'GRANT SELECT, INSERT, UPDATE ON {table} TO "{sp}"'
+        for table in APP_WRITABLE_TABLES
+    ]
+    return stmts
 
 
 # ── Databricks client layer (all Databricks API calls go through the SDK) ─────
@@ -399,21 +472,20 @@ def resolve_warehouse(
     return result.id
 
 
-def run_uc_statements(
-    w, warehouse_id: str, catalog: str, statements: List[str]
-) -> None:
+def run_uc_statements(w, warehouse_id: str, statements: List[str]) -> None:
     """Execute a list of Unity Catalog SQL statements via the Statements API.
 
-    Each statement runs with ``wait_timeout="50s"`` (the API caps it at 50s);
-    a terminal failure state raises so the deploy stops instead of silently
-    shipping a broken app.
+    No session catalog is set: every statement Quest issues is fully qualified,
+    and pinning the session to a catalog that the first statement is about to
+    create would fail before it ever ran. Each statement runs with
+    ``wait_timeout="50s"`` (the API cap); a terminal failure state raises so the
+    deploy stops instead of silently shipping a broken app.
     """
     _FAILED = ("FAILED", "CANCELED", "CLOSED")
     for stmt in statements:
         resp = w.statement_execution.execute_statement(
             statement=stmt,
             warehouse_id=warehouse_id,
-            catalog=catalog,
             wait_timeout="50s",
         )
         state = _state_value(resp)
@@ -468,6 +540,19 @@ def upload_dir(w, local_dir: Path, workspace_dir: str) -> int:
         )
         uploaded += 1
     return uploaded
+
+
+def upload_text(w, text: str, workspace_path: str) -> None:
+    """Upload a single generated file to the workspace."""
+    import base64
+    from databricks.sdk.service.workspace import ImportFormat
+
+    w.workspace.import_(
+        path=workspace_path,
+        content=base64.b64encode(text.encode("utf-8")).decode("ascii"),
+        format=ImportFormat.AUTO,
+        overwrite=True,
+    )
 
 
 def create_or_get_app(w, name: str, description: str):
@@ -536,62 +621,239 @@ def grant_sp_warehouse(w, warehouse_id: str, sp: str) -> None:
     )
 
 
-def _scoring_notebook_task(notebook_path: str, catalog: str, schema: str,
-                           warehouse_id: str, app_name: str, lakebase_host: str,
-                           lakebase_db: str):
-    """Build the scoring NotebookTask (shared by submit + scheduled job)."""
-    from databricks.sdk.service.jobs import NotebookTask
-
-    return NotebookTask(
-        notebook_path=notebook_path,
-        base_parameters={
-            "quest_catalog": catalog,
-            "quest_schema": schema,
-            "app_name": app_name,
-            "warehouse_id": warehouse_id,
-            "lakebase_host": lakebase_host,
-            "lakebase_db": lakebase_db,
-        },
-    )
+ENVIRONMENT_KEY = "default"
 
 
-def submit_scoring(w, notebook_path: str, catalog: str, schema: str,
-                   warehouse_id: str, app_name: str, lakebase_host: str = "",
-                   lakebase_db: str = "quest_db"):
-    """Submit a one-time scoring run (jobs.submit -> SubmitTask)."""
-    from databricks.sdk.service.jobs import SubmitTask
+def job_name(app_name: str) -> str:
+    """Scoring job name, scoped to the app.
 
-    nb = _scoring_notebook_task(notebook_path, catalog, schema, warehouse_id,
-                                app_name, lakebase_host, lakebase_db)
-    return w.jobs.submit(
-        run_name="Quest Scoring (one-time)",
-        tasks=[SubmitTask(task_key="run_scoring", notebook_task=nb)],
-    )
-
-
-def create_scheduled_job(w, notebook_path: str, catalog: str, schema: str,
-                         warehouse_id: str, app_name: str, lakebase_host: str = "",
-                         lakebase_db: str = "quest_db"):
-    """Create the every-4-hours scheduled scoring job (jobs.create -> Task).
-
-    Cron ``0 0 */4 * * ?`` / timezone UTC -- matches deploy.sh + SETUP.md Step 9.
+    The app name is part of it so two Quest deployments in one workspace get two
+    jobs. A fixed name would make the second deploy silently overwrite the first
+    deployment's schedule, since the job is looked up by name.
     """
-    from databricks.sdk.service.jobs import CronSchedule, Task
+    return f"[Quest] Scoring Pipeline ({app_name})"
 
-    nb = _scoring_notebook_task(notebook_path, catalog, schema, warehouse_id,
-                                app_name, lakebase_host, lakebase_db)
-    return w.jobs.create(
-        name="[Quest] Scoring Pipeline",
-        tasks=[Task(task_key="run_scoring", notebook_task=nb)],
+
+def scoring_task_graph(notebooks_dir: str, catalog: str, schema: str,
+                       warehouse_id: str, app_name: str, data_backend: str,
+                       lakebase_host: str, lakebase_db: str) -> List[dict]:
+    """Describe the four scoring tasks and their dependencies.
+
+    Mirrors the DAB job in ``databricks.yml``. Order matters: the attestation
+    round-trip has to land in Delta before scoring reads the feed, and the
+    Lakebase sync has to run after scoring so the app sees the fresh numbers.
+    Returned as plain dicts so both the one-time submit and the scheduled job can
+    build their own task type from one definition.
+    """
+    lakebase_params = {
+        "quest_catalog": catalog,
+        "quest_schema": schema,
+        "lakebase_host": lakebase_host,
+        "lakebase_db": lakebase_db,
+        "app_name": app_name,
+    }
+    return [
+        {
+            "task_key": "roundtrip_attestations",
+            "notebook_path": f"{notebooks_dir}/roundtrip_attestations",
+            "params": lakebase_params,
+            "depends_on": [],
+        },
+        {
+            "task_key": "run_scoring",
+            "notebook_path": f"{notebooks_dir}/scoring_pipeline",
+            "params": {
+                "quest_catalog": catalog,
+                "quest_schema": schema,
+                "app_name": app_name,
+                "warehouse_id": warehouse_id,
+            },
+            "depends_on": ["roundtrip_attestations"],
+        },
+        {
+            "task_key": "sync_to_lakebase",
+            "notebook_path": f"{notebooks_dir}/lakebase_sync",
+            "params": lakebase_params,
+            "depends_on": ["run_scoring"],
+        },
+        {
+            "task_key": "warm_warehouse",
+            "notebook_path": f"{notebooks_dir}/warm_warehouse",
+            "params": {
+                "quest_data_backend": data_backend,
+                "warehouse_id": warehouse_id,
+            },
+            "depends_on": ["run_scoring"],
+        },
+    ]
+
+
+def _job_environments():
+    """Serverless environment for the job.
+
+    ``lakebase_sync`` and ``roundtrip_attestations`` import psycopg2, which is not
+    preinstalled on serverless compute, so declare it the same way
+    ``databricks.yml`` does.
+    """
+    from databricks.sdk.service.compute import Environment
+    from databricks.sdk.service.jobs import JobEnvironment
+
+    return [
+        JobEnvironment(
+            environment_key=ENVIRONMENT_KEY,
+            spec=Environment(client="1", dependencies=["psycopg2-binary"]),
+        )
+    ]
+
+
+def _is_bundle_managed(w, job_id: int) -> bool:
+    """True when the job is owned by a Databricks Asset Bundle.
+
+    deploy.sh deploys through DAB, and with the default app name the bundle's job
+    has exactly the name this deployer looks for. Rewriting a bundle-owned job
+    behind Terraform's back desynchronises bundle state, so detect it and leave
+    it alone.
+    """
+    try:
+        deployment = w.jobs.get(job_id=job_id).settings.deployment
+    except Exception:  # noqa: BLE001
+        return False
+    kind = getattr(deployment, "kind", None)
+    return str(getattr(kind, "value", kind) or "").upper() == "BUNDLE"
+
+
+def _build_tasks(graph: List[dict], task_cls):
+    """Turn the task graph into SDK ``Task`` objects."""
+    from databricks.sdk.service.jobs import NotebookTask, TaskDependency
+
+    tasks = []
+    for spec in graph:
+        tasks.append(
+            task_cls(
+                task_key=spec["task_key"],
+                notebook_task=NotebookTask(
+                    notebook_path=spec["notebook_path"],
+                    base_parameters=spec["params"],
+                ),
+                depends_on=[TaskDependency(task_key=d) for d in spec["depends_on"]]
+                or None,
+                environment_key=ENVIRONMENT_KEY,
+            )
+        )
+    return tasks
+
+
+def trigger_scoring(w, job_id: int):
+    """Kick off an immediate run of the scheduled job.
+
+    Deliberately ``run_now`` on the job rather than a detached ``jobs.submit``:
+    a one-off run would ignore the job's ``max_concurrent_runs=1`` and could
+    overlap the 4-hourly schedule, which collides on a Delta
+    ConcurrentDeleteReadException. Going through the job also keeps the manual
+    run in the same history the schedule writes to.
+    """
+    return w.jobs.run_now(job_id=job_id)
+
+
+def create_scheduled_job(w, graph: List[dict], app_name: str):
+    """Create or update the every-4-hours scoring job.
+
+    Looks the job up by name first and resets the existing one instead of
+    creating a second copy, so re-running the deployer is safe. Cron
+    ``0 0 */4 * * ?`` UTC, and ``max_concurrent_runs=1`` because the scoring
+    notebook does whole-table DELETE + re-INSERT and overlapping runs collide on
+    a Delta ConcurrentDeleteReadException.
+    """
+    from databricks.sdk.service.jobs import (
+        CronSchedule,
+        JobSettings,
+        PauseStatus,
+        QueueSettings,
+        Task,
+    )
+
+    name = job_name(app_name)
+    settings = JobSettings(
+        name=name,
+        tasks=_build_tasks(graph, Task),
+        environments=_job_environments(),
+        max_concurrent_runs=1,
+        # With concurrency pinned to 1, queue an overlapping trigger instead of
+        # rejecting it -- a deploy-time run must not fail because the 4-hourly
+        # schedule happens to be mid-flight.
+        queue=QueueSettings(enabled=True),
         schedule=CronSchedule(
             quartz_cron_expression="0 0 */4 * * ?",
             timezone_id="UTC",
+            pause_status=PauseStatus.UNPAUSED,
         ),
     )
+
+    existing = next((j for j in w.jobs.list(name=name)), None)
+    if existing is not None:
+        if _is_bundle_managed(w, existing.job_id):
+            log_warn(
+                f"Job '{name}' is managed by a Databricks Asset Bundle "
+                "(deploy.sh); leaving it untouched."
+            )
+            log_info("Use deploy.sh for it, or pass a different --app-name.")
+            return existing.job_id
+        # update, not reset: reset replaces the whole settings object and would
+        # silently drop tags, notifications, or timeouts someone added by hand.
+        w.jobs.update(job_id=existing.job_id, new_settings=settings)
+        return existing.job_id
+
+    created = w.jobs.create(
+        name=settings.name,
+        tasks=settings.tasks,
+        environments=settings.environments,
+        max_concurrent_runs=settings.max_concurrent_runs,
+        queue=settings.queue,
+        schedule=settings.schedule,
+    )
+    return created.job_id
 
 
 # ── Lakebase provisioning (SDK instance + lazy-psycopg2 DDL/grants) ───────────
 LAKEBASE_CAPACITY = "CU_1"
+
+
+def lakebase_api(w):
+    """Return the SDK API group that owns Lakebase database instances.
+
+    The Lakebase surface moved between SDK releases: ``w.database_instances``
+    (added in databricks-sdk 0.54) was removed in 0.56 and replaced by
+    ``w.database``. Prefer the current name and fall back to the old one so the
+    deployer works on both an unpinned ``pip install databricks-sdk`` and the
+    0.55 pin in ``app/requirements.txt``.
+    """
+    for attr in ("database", "database_instances"):
+        api = getattr(w, attr, None)
+        if api is not None:
+            return api
+    raise RuntimeError(
+        "This databricks-sdk has no Lakebase API (neither w.database nor "
+        "w.database_instances). Upgrade with: pip install -U databricks-sdk"
+    )
+
+
+def lakebase_types():
+    """Return ``(DatabaseInstance, DatabaseInstanceState)`` for the running SDK.
+
+    These dataclasses live in ``databricks.sdk.service.database`` on 0.56+ and
+    in ``databricks.sdk.service.catalog`` on 0.54/0.55.
+    """
+    try:
+        from databricks.sdk.service.database import (
+            DatabaseInstance,
+            DatabaseInstanceState,
+        )
+    except ImportError:
+        from databricks.sdk.service.catalog import (  # type: ignore[no-redef]
+            DatabaseInstance,
+            DatabaseInstanceState,
+        )
+    return DatabaseInstance, DatabaseInstanceState
 
 
 def _instance_state(inst) -> str:
@@ -605,14 +867,14 @@ def _instance_state(inst) -> str:
 def provision_lakebase(w, project_id: str) -> dict:
     """Get-or-create a Lakebase instance, wait until AVAILABLE, return its host.
 
-    Returns ``{"host": <endpoint dns>, "instance_name": <name>}``. Modeled on
-    install_lakemeter.py's provisioning (create -> poll ``get_database_instance``
-    until ``DatabaseInstanceState.AVAILABLE``). ``DatabaseInstance`` lives in
-    ``databricks.sdk.service.catalog`` and the API group is ``w.database_instances``
-    in the pinned SDK (0.55); the endpoint host is the ``read_write_dns`` attribute.
+    Returns ``{"host": <endpoint dns>, "instance_name": <name>}``. Creates the
+    instance then polls ``get_database_instance`` until the state is AVAILABLE;
+    the endpoint host is the ``read_write_dns`` attribute.
     """
     import time
-    from databricks.sdk.service.catalog import DatabaseInstance, DatabaseInstanceState
+
+    db = lakebase_api(w)
+    DatabaseInstance, DatabaseInstanceState = lakebase_types()
 
     ready_state = DatabaseInstanceState.AVAILABLE.value  # "AVAILABLE"
     name = project_id
@@ -623,7 +885,7 @@ def provision_lakebase(w, project_id: str) -> dict:
     #    loop -- do NOT create a duplicate.
     exists = False
     try:
-        existing = w.database_instances.get_database_instance(name=name)
+        existing = db.get_database_instance(name=name)
         exists = True
         host = getattr(existing, "read_write_dns", None)
         if host and _instance_state(existing) == ready_state:
@@ -637,18 +899,20 @@ def provision_lakebase(w, project_id: str) -> dict:
     #    the DatabaseInstance directly (no Wait wrapper).
     if not exists:
         log_info(f"Creating Lakebase instance '{name}' ({LAKEBASE_CAPACITY})...")
-        inst = w.database_instances.create_database_instance(
+        created = db.create_database_instance(
             database_instance=DatabaseInstance(
                 name=name, capacity=LAKEBASE_CAPACITY, stopped=False
             )
         )
+        # 0.56+ wraps this in a Wait[...]; unwrap when present.
+        inst = getattr(created, "response", created)
         host = getattr(inst, "read_write_dns", None) or host
 
     # 3. Poll until the instance is AVAILABLE with an endpoint host. Lakebase only
     #    exposes read_write_dns once the instance is usable (a fresh instance
     #    reports STARTING with no host), so we require both.
     for i in range(120):  # ~10 min max
-        polled = w.database_instances.get_database_instance(name=name)
+        polled = db.get_database_instance(name=name)
         host = getattr(polled, "read_write_dns", None) or host
         state = _instance_state(polled)
         if state in ("FAILED", "DELETING"):
@@ -664,24 +928,33 @@ def provision_lakebase(w, project_id: str) -> dict:
 
 
 def _lakebase_credential(w, instance_name: str) -> str:
-    """Mint a short-lived Lakebase credential token via the SDK.
+    """Mint a short-lived Lakebase credential token.
 
-    ``generate_database_credential`` is NOT present on ``DatabaseInstancesAPI`` in
-    the pinned SDK (0.55) -- the Lakebase credential API landed in a later SDK
-    release. Call it when the running SDK exposes it (forward-compatible), and
-    otherwise raise a clear, actionable error so the caller's warning names the real
-    cause instead of surfacing a bare ``AttributeError``.
+    Prefers the SDK's ``generate_database_credential``. Older SDKs do not expose
+    it, so fall back to the REST endpoint the scoring job's sync notebook already
+    uses (``POST /api/2.0/postgres/credentials``), which accepts the instance name
+    as a project endpoint path.
     """
     import uuid
 
-    gen = getattr(w.database_instances, "generate_database_credential", None)
-    if gen is None:
-        raise RuntimeError(
-            "generate_database_credential is unavailable in this databricks-sdk "
-            "(pinned 0.55 lacks it); upgrade the SDK to mint a Lakebase token."
-        )
-    cred = gen(request_id=str(uuid.uuid4()), instance_names=[instance_name])
-    return cred.token
+    gen = getattr(lakebase_api(w), "generate_database_credential", None)
+    if gen is not None:
+        cred = gen(request_id=str(uuid.uuid4()), instance_names=[instance_name])
+        return cred.token
+
+    resp = w.api_client.do(
+        "POST",
+        "/api/2.0/postgres/credentials",
+        body={
+            "endpoint": (
+                f"projects/{instance_name}/branches/production/endpoints/primary"
+            )
+        },
+    )
+    token = (resp or {}).get("token")
+    if not token:
+        raise RuntimeError(f"Lakebase credential request returned no token: {resp}")
+    return token
 
 
 def lakebase_connect(host: str, user: str, token: str, dbname: str):
@@ -740,18 +1013,22 @@ def grant_sp_lakebase(w, project_id: str, sp: str, host: str, user: str,
     database API, then applies the Postgres-side SELECT grants over psycopg2
     (lazy). Best-effort: role registration tolerates "already exists".
     """
-    # Register the SP as a Lakebase role so OAuth login works. The role types and
-    # create_database_instance_role are not present in the pinned SDK (0.55) -- when
-    # absent this is a best-effort no-op (the surrounding except logs a warning) and
-    # the Postgres GRANTs below still run. On SDKs that expose it, the call registers
-    # the SP as a SERVICE_PRINCIPAL identity.
+    # Register the SP as a Lakebase role so OAuth login works. Older SDKs do not
+    # expose the role types at all, in which case this is a best-effort no-op and
+    # the Postgres GRANTs below still run.
     try:
-        from databricks.sdk.service.catalog import (
-            DatabaseInstanceRole,
-            DatabaseInstanceRoleIdentityType,
-        )
+        try:
+            from databricks.sdk.service.database import (
+                DatabaseInstanceRole,
+                DatabaseInstanceRoleIdentityType,
+            )
+        except ImportError:
+            from databricks.sdk.service.catalog import (  # type: ignore[no-redef]
+                DatabaseInstanceRole,
+                DatabaseInstanceRoleIdentityType,
+            )
 
-        w.database_instances.create_database_instance_role(
+        lakebase_api(w).create_database_instance_role(
             instance_name=project_id,
             database_instance_role=DatabaseInstanceRole(
                 name=sp,
@@ -759,7 +1036,10 @@ def grant_sp_lakebase(w, project_id: str, sp: str, host: str, user: str,
             ),
         )
     except Exception as exc:  # noqa: BLE001
-        if "already exists" not in str(exc).lower():
+        # Re-running a deploy hits an already-registered role. The API words that
+        # as a conflict rather than "already exists", so match both and stay quiet.
+        benign = ("already exists", "conflicts with existing")
+        if not any(phrase in str(exc).lower() for phrase in benign):
             log_warn(f"Lakebase SP role registration: {str(exc)[:140]}")
 
     # Apply the Postgres SELECT grants as the deploying user.
@@ -826,9 +1106,7 @@ def run(cfg: Config) -> int:
 
     # ── Step 4: Unity Catalog setup ───────────────────────────────────────────
     log_step(4, TOTAL_STEPS, f"Setting up Unity Catalog {cfg.catalog}.{cfg.schema}")
-    run_uc_statements(
-        w, warehouse_id, cfg.catalog, uc_setup_statements(cfg.catalog, cfg.schema)
-    )
+    setup_unity_catalog(w, warehouse_id, cfg.catalog, cfg.schema)
     log_ok("Catalog, schema, and app_settings ready")
 
     # ── Step 5: upload app source (+ notebooks when present) ──────────────────
@@ -842,25 +1120,32 @@ def run(cfg: Config) -> int:
     # ── Step 6: data backend (lakebase provision OR warehouse skip) ───────────
     log_step(6, TOTAL_STEPS, f"Configuring the {cfg.data_backend} data backend")
     lakebase_host = cfg.lakebase_host
-    lakebase_info = None
     if cfg.data_backend == "lakebase":
+        project_id = sanitize_project_id(cfg.app_name)
         if lakebase_host:
             log_ok(f"Using provided Lakebase host: {lakebase_host}")
         else:
-            project_id = sanitize_project_id(cfg.app_name)
-            lakebase_info = provision_lakebase(w, project_id)
-            lakebase_host = lakebase_info["host"]
+            lakebase_host = provision_lakebase(w, project_id)["host"]
+        # Fatal on purpose: the app reads these tables, so shipping without them
+        # would leave a running app that can never return data.
         try:
-            project_id = sanitize_project_id(cfg.app_name)
-            conn_factory = _lakebase_conn_factory(w, project_id, lakebase_host, user_email)
+            conn_factory = _lakebase_conn_factory(
+                w, project_id, lakebase_host, user_email
+            )
             lakebase_create_db_and_tables(conn_factory, cfg.lakebase_db, lakebase_ddl())
             log_ok(f"Lakebase database '{cfg.lakebase_db}' and tables ready")
         except Exception as exc:  # noqa: BLE001
-            log_warn(f"Lakebase DDL step: {str(exc)[:160]}")
+            raise RuntimeError(
+                f"Could not prepare the Lakebase database '{cfg.lakebase_db}'.\n"
+                f"    {exc}\n"
+                f"    The app reads these tables, so the deploy stops here rather\n"
+                f"    than leaving you a running app with no data. Re-run with\n"
+                f"    --data-backend warehouse to skip Lakebase entirely."
+            ) from exc
     else:
         log_info("Warehouse backend -- skipping Lakebase provisioning.")
 
-    # ── Step 7: create app, write app.yaml, deploy ────────────────────────────
+    # ── Step 7: create app, upload its config, deploy ─────────────────────────
     log_step(7, TOTAL_STEPS, f"Creating and deploying app '{cfg.app_name}'")
     app = create_or_get_app(
         w, cfg.app_name, "Databricks Quest - gamification for platform adoption"
@@ -874,9 +1159,10 @@ def run(cfg: Config) -> int:
         lakebase_host=lakebase_host if cfg.data_backend == "lakebase" else "",
         lakebase_db=cfg.lakebase_db,
     )
-    (app_dir / "app.yaml").write_text(app_yaml, encoding="utf-8")
-    # Re-upload so the freshly written app.yaml is what gets deployed.
-    upload_dir(w, app_dir, ws_app_dir)
+    # Upload the rendered config straight to the workspace copy rather than
+    # writing it into the repo: no dirty working tree, no second full upload, and
+    # two deploys from one checkout cannot race on the same local file.
+    upload_text(w, app_yaml, f"{ws_app_dir}/app.yaml")
     deploy_app(w, cfg.app_name, ws_app_dir)
     log_ok("App source deployed")
 
@@ -885,8 +1171,7 @@ def run(cfg: Config) -> int:
     sp = getattr(app, "service_principal_client_id", None)
     if sp:
         run_uc_statements(
-            w, warehouse_id, cfg.catalog,
-            uc_grant_statements(cfg.catalog, cfg.schema, sp),
+            w, warehouse_id, uc_grant_statements(cfg.catalog, cfg.schema, sp)
         )
         log_ok(f"Granted UC access to SP {sp}")
         # CAN_USE on the warehouse: the app (running as the SP) needs it for the
@@ -911,22 +1196,26 @@ def run(cfg: Config) -> int:
 
     # ── Step 9: scoring pipeline + scheduled job ──────────────────────────────
     log_step(9, TOTAL_STEPS, "Scoring pipeline")
+    graph = scoring_task_graph(
+        _notebooks_dir(user_email, cfg.app_name),
+        cfg.catalog, cfg.schema, warehouse_id, cfg.app_name,
+        cfg.data_backend, lakebase_host or "", cfg.lakebase_db,
+    )
+    job_id = None
+    try:
+        job_id = create_scheduled_job(w, graph, cfg.app_name)
+        log_ok(f"Scoring job {job_id} scheduled (every 4 hours, UTC)")
+    except Exception as exc:  # noqa: BLE001
+        log_warn(f"Scheduled job: {str(exc)[:160]}")
     if cfg.skip_scoring:
-        log_warn("Skipping scoring (--skip-scoring).")
-    else:
-        nb_path = f"{_notebooks_dir(user_email, cfg.app_name)}/scoring_pipeline"
+        log_warn("Skipping the initial scoring run (--skip-scoring).")
+    elif job_id is not None:
         try:
-            submit_scoring(
-                w, nb_path, cfg.catalog, cfg.schema, warehouse_id,
-                cfg.app_name, lakebase_host or "", cfg.lakebase_db,
-            )
-            create_scheduled_job(
-                w, nb_path, cfg.catalog, cfg.schema, warehouse_id,
-                cfg.app_name, lakebase_host or "", cfg.lakebase_db,
-            )
-            log_ok("Scoring submitted and scheduled (every 4 hours, UTC)")
+            run = trigger_scoring(w, job_id)
+            log_ok(f"Initial scoring run started (run {run.run_id})")
+            log_info("First results appear once it finishes (typically 5-15 min).")
         except Exception as exc:  # noqa: BLE001
-            log_warn(f"Scoring step: {str(exc)[:160]}")
+            log_warn(f"Initial scoring run: {str(exc)[:160]}")
 
     # ── Step 10: print the app URL ────────────────────────────────────────────
     log_step(10, TOTAL_STEPS, "Done")

@@ -52,6 +52,9 @@ Full instructions: **[SETUP.md](SETUP.md)** -- covers three deployment methods:
 | **Scripted** (`./deploy.sh`) | Most users | ~15 min |
 | **Manual** (step-by-step) | Full control, restricted environments | ~30 min |
 | **Quick** (`./deploy.sh --quick`) | Fast testing without DAB | ~10 min |
+| **Python** (`python deploy.py`) | Windows / cross-platform (no bash) | ~15 min |
+
+On Windows or any OS without bash, `python deploy.py --catalog <name> --data-backend warehouse` runs the whole deploy via the Databricks SDK. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
 Quick start:
 

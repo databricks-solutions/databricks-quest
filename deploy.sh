@@ -928,6 +928,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 STATIC_DIR="$SCRIPT_DIR/app/static"
 
+# Anchor the working directory to the repo root (where this script lives). The
+# Databricks CLI locates the bundle by walking UP from the current directory —
+# it has no --bundle-root flag — so `bundle deploy`/`bundle run` fail with
+# "unable to locate bundle root: databricks.yml not found" whenever the script
+# is launched from anywhere other than the repo root (e.g. `bash ~/dl/deploy.sh`
+# or `sh path/to/deploy.sh`). Every file path below is already absolute
+# ($SCRIPT_DIR/... , $BUNDLE_FILE), so this cd is safe and only fixes the CLI's
+# CWD-relative bundle discovery.
+cd "$SCRIPT_DIR" || fail "Could not enter script directory: $SCRIPT_DIR"
+
 # The repo ships a COMMITTED prebuilt frontend (app/static/), so deploy works on
 # restricted networks with zero npm access. We refresh it from source only when
 # npm is available and can reach a registry; otherwise we keep the committed
@@ -1048,7 +1058,59 @@ except: print('PENDING')
 else
   # ── Full Deploy: DAB Bundle ────────────────────────────────────────────────
   if [ ! -f "$BUNDLE_FILE" ]; then
-    fail "databricks.yml not found. Are you running this from the repo root?"
+    # The file ships in every download (git clone + ZIP). If it's missing from
+    # the script's own directory, the usual cause is NOT the working directory
+    # (SCRIPT_DIR is resolved from BASH_SOURCE, and Step 4 already read
+    # app/static/ from here). It's almost always a near-miss filename: an editor
+    # or browser saved it as databricks.yml.txt, the OS hides the ".txt" so it
+    # LOOKS like "databricks.yml" in Finder/Explorer, or it's databricks.yaml.
+    # Try to auto-recover from an unambiguous near-miss before failing.
+    # The CLI's `bundle deploy` only accepts a root named exactly databricks.yml
+    # or databricks.yaml (verified). A hidden-extension copy like
+    # databricks.yml.txt is NOT recognized, so we must materialize a real
+    # databricks.yml from it — pointing BUNDLE_FILE at the .txt alone would fix
+    # the host rewrite but still fail at deploy. databricks.yaml IS recognized,
+    # so we use it in place.
+    # Check databricks.yaml FIRST: it's a valid root the CLI reads in place, so
+    # if it exists we use it and never create a .yml — which also avoids ever
+    # producing both .yml and .yaml (the CLI rejects that as "multiple bundle
+    # root configuration files").
+    RECOVERED=""
+    for cand in \
+      "$SCRIPT_DIR/databricks.yaml" \
+      "$SCRIPT_DIR/databricks.yml.txt" \
+      "$SCRIPT_DIR/databricks.yaml.txt" \
+      "$SCRIPT_DIR/databricks.yml.yml"; do
+      if [ -f "$cand" ]; then
+        if [ "$cand" = "$SCRIPT_DIR/databricks.yaml" ]; then
+          # CLI reads .yaml natively — use as-is, just retarget the rewrite.
+          warn "Found 'databricks.yaml' instead of 'databricks.yml' — using it as-is."
+          BUNDLE_FILE="$cand"
+        else
+          # Hidden/extra extension — copy to the canonical name the CLI needs.
+          warn "Found '$(basename "$cand")' — your OS is hiding the real extension."
+          warn "Copying it to 'databricks.yml' so the deploy can find it. Rename the original to fix this permanently."
+          cp "$cand" "$SCRIPT_DIR/databricks.yml" || fail "Could not create databricks.yml from '$(basename "$cand")'."
+          BUNDLE_FILE="$SCRIPT_DIR/databricks.yml"
+        fi
+        RECOVERED="yes"
+        break
+      fi
+    done
+    if [ -z "$RECOVERED" ]; then
+      echo ""
+      echo "  This directory: $SCRIPT_DIR"
+      echo "  Files that look like the bundle file here:"
+      ls -1 "$SCRIPT_DIR" | grep -i "databricks" | sed 's/^/    /' || echo "    (none matching 'databricks')"
+      echo ""
+      echo "  Note: 'databricks.yml' is present in the repo, and Step 4 already read"
+      echo "  app/static/ from THIS folder — so you ARE in the repo root. The file is"
+      echo "  most likely saved with a hidden extension (e.g. databricks.yml.txt) or as"
+      echo "  databricks.yaml. Show file extensions in your file manager, rename it to"
+      echo "  exactly 'databricks.yml', then re-run. Or re-clone with:"
+      echo "    git clone https://github.com/databricks-solutions/databricks-quest.git"
+      fail "databricks.yml not found in $SCRIPT_DIR (see notes above)."
+    fi
   fi
 
   # Update workspace host in databricks.yml

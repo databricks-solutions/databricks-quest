@@ -277,35 +277,89 @@ This takes 2-10 minutes depending on workspace size.
 
 ### Step 9: Create a scheduled job (recommended)
 
-To keep data fresh, create a job that runs the scoring pipeline every 4 hours:
+To keep data fresh, create a job that runs every 4 hours. It has four tasks, not one. `run_scoring` only writes Delta; `sync_to_lakebase` is what copies those rows into the database the app reads, so a Lakebase deployment with only `run_scoring` shows zeros forever.
+
+Leave `lakebase_host` empty for now. If you are using the SQL warehouse backend, leave it empty permanently and the two Lakebase tasks will skip themselves. If you are provisioning Lakebase in Step 10, come back and set it to the endpoint host you get there.
 
 ```bash
 databricks jobs create --json '{
-  "name": "[Quest] Scoring Pipeline",
-  "tasks": [{
-    "task_key": "run_scoring",
-    "notebook_task": {
-      "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/scoring_pipeline",
-      "base_parameters": {
-        "quest_catalog": "quest_data",
-        "quest_schema": "quest",
-        "app_name": "databricks-quest",
-        "warehouse_id": "YOUR_WAREHOUSE_ID"
+  "name": "[Quest] Scoring Pipeline (databricks-quest)",
+  "max_concurrent_runs": 1,
+  "queue": {"enabled": true},
+  "tasks": [
+    {
+      "task_key": "roundtrip_attestations",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/roundtrip_attestations",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "lakebase_host": "",
+          "lakebase_db": "quest_db"
+        },
+        "source": "WORKSPACE"
       },
-      "source": "WORKSPACE"
+      "environment_key": "default"
     },
-    "environment_key": "default"
-  }],
+    {
+      "task_key": "run_scoring",
+      "depends_on": [{"task_key": "roundtrip_attestations"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/scoring_pipeline",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "warehouse_id": "YOUR_WAREHOUSE_ID"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    },
+    {
+      "task_key": "sync_to_lakebase",
+      "depends_on": [{"task_key": "run_scoring"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/lakebase_sync",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "lakebase_host": "",
+          "lakebase_db": "quest_db"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    },
+    {
+      "task_key": "warm_warehouse",
+      "depends_on": [{"task_key": "run_scoring"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/warm_warehouse",
+        "base_parameters": {
+          "quest_data_backend": "lakebase",
+          "warehouse_id": "YOUR_WAREHOUSE_ID"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    }
+  ],
   "environments": [{
     "environment_key": "default",
-    "spec": {"client": "1"}
+    "spec": {"client": "1", "dependencies": ["psycopg2-binary"]}
   }],
   "schedule": {
     "quartz_cron_expression": "0 0 */4 * * ?",
-    "timezone_id": "UTC"
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
   }
 }'
 ```
+
+Three details that matter. `psycopg2-binary` is declared because the two Lakebase tasks import it and serverless does not preinstall it. `max_concurrent_runs: 1` stops an overlapping run from colliding with the scoring notebook's whole-table DELETE and re-INSERT on a Delta `ConcurrentDeleteReadException`. Set `quest_data_backend` on `warm_warehouse` to `warehouse` if that is the backend you are running, otherwise it skips itself.
 
 ### Step 10: Provision Lakebase
 

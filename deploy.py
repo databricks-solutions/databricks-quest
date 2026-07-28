@@ -261,6 +261,23 @@ def is_missing_catalog_error(exc: Exception) -> bool:
     return "NO_SUCH_CATALOG" in str(exc).upper()
 
 
+#: Catalogs that exist everywhere and are never a sensible target for Quest.
+_BUILTIN_CATALOGS = {"system", "samples", "hive_metastore", "__databricks_internal"}
+
+
+def suggest_catalogs(w, limit: int = 8) -> List[str]:
+    """Names of catalogs the deploying user could plausibly use for Quest.
+
+    Someone new to Databricks who hits "cannot create catalog" has no idea what
+    to pass instead, so offer the ones they can already see.
+    """
+    try:
+        names = [c.name for c in w.catalogs.list() if c.name]
+    except Exception:  # noqa: BLE001
+        return []
+    return [n for n in names if n not in _BUILTIN_CATALOGS][:limit]
+
+
 def setup_unity_catalog(w, warehouse_id: str, catalog: str, schema: str) -> None:
     """Create the Quest schema, creating the catalog first only if it is missing.
 
@@ -281,12 +298,20 @@ def setup_unity_catalog(w, warehouse_id: str, catalog: str, schema: str) -> None
     try:
         run_uc_statements(w, warehouse_id, [f"CREATE CATALOG IF NOT EXISTS {catalog}"])
     except RuntimeError as exc:
+        options = suggest_catalogs(w)
+        hint = (
+            f"    Catalogs you already have access to: {', '.join(options)}\n"
+            f"    Re-run with one of them, for example:\n"
+            f"      python deploy.py --catalog {options[0]}\n"
+            if options
+            else "    Ask a metastore admin to create it and grant you CREATE SCHEMA.\n"
+        )
         raise RuntimeError(
             f"Could not create catalog '{catalog}'.\n"
             f"    {exc}\n"
-            f"    Fix: create the catalog yourself (the UI handles Default Storage\n"
-            f"    accounts correctly), or re-run pointing --catalog at a catalog you\n"
-            f"    can already create schemas in."
+            f"{hint}"
+            f"    Creating one yourself in the UI also works (the UI handles\n"
+            f"    Default Storage accounts correctly)."
         ) from exc
 
     run_uc_statements(w, warehouse_id, uc_schema_statements(catalog, schema))
@@ -436,10 +461,10 @@ def resolve_warehouse(
 
     An explicit ``wid`` wins (no lookup). Otherwise match ``name``
     case-insensitively against ``w.warehouses.list()``. With no name and no
-    match: non-interactive picks the first existing warehouse, else creates a
-    dedicated 2X-Small serverless PRO warehouse (60-min auto-stop) -- mirroring
-    deploy.sh's "always wire a warehouse" behavior. Interactive callers are
-    prompted.
+    match, a user at a terminal is prompted; anyone else (``--non-interactive``,
+    piped output, CI) gets the first existing warehouse, and if the workspace has
+    none, a dedicated 2X-Small serverless PRO warehouse (60-min auto-stop) is
+    created. Mirrors deploy.sh's "always wire a warehouse" behavior.
     """
     if wid:
         return wid
@@ -453,7 +478,12 @@ def resolve_warehouse(
                 return wh.id
         raise RuntimeError(f"No warehouse found matching name: {name!r}")
 
-    if warehouses and not non_interactive:
+    # Only prompt when someone is actually there to answer. Piping the output to
+    # a file, or running from CI, leaves stdin closed, and input() would abort the
+    # deploy with a bare "EOF when reading a line".
+    can_prompt = not non_interactive and sys.stdin is not None and sys.stdin.isatty()
+
+    if warehouses and can_prompt:
         print("\n  Available SQL Warehouses:")
         for i, wh in enumerate(warehouses, 1):
             print(f"    {i}) {wh.name} ({wh.id})")
@@ -466,8 +496,10 @@ def resolve_warehouse(
             return warehouses[idx].id
         raise RuntimeError("Invalid warehouse selection.")
 
-    if warehouses:  # non-interactive: default to the first
-        log_info("Non-interactive -- defaulting to the first warehouse.")
+    if warehouses:
+        reason = "Non-interactive" if non_interactive else "No interactive terminal"
+        log_info(f"{reason} -- defaulting to warehouse '{warehouses[0].name}'.")
+        log_info("Pass --warehouse NAME or --warehouse-id ID to choose another.")
         return warehouses[0].id
 
     # None exist: provision a dedicated 2X-Small serverless warehouse.

@@ -41,18 +41,42 @@ cd databricks-quest
 (No Git? Download the ZIP from the repo's green "Code" button and extract it.
 The frontend ships pre-built, so there is nothing to build.)
 
+## Pick a catalog first
+
+Quest writes its scored tables into a Unity Catalog catalog, and you have to say
+which one. Point `--catalog` at a catalog **you can already create schemas in**.
+
+Most people cannot create a new catalog: that needs `CREATE CATALOG` on the
+metastore, which is usually an admin-only privilege. If the catalog you name does
+not exist, `deploy.py` tries to create it, and when that is refused it stops
+before changing anything and lists the catalogs you do have access to, so you can
+re-run with one of them.
+
+If you are not sure, open **Catalog** in the workspace sidebar and pick one your
+team already uses, or ask an admin to run:
+
+```sql
+CREATE CATALOG IF NOT EXISTS quest_data;
+GRANT USE CATALOG, CREATE SCHEMA ON CATALOG quest_data TO `you@example.com`;
+```
+
 ## Deploy
 
 The simplest, most portable option — **warehouse backend** (no Lakebase):
 
 ```
-python deploy.py --catalog quest_data --data-backend warehouse
+python deploy.py --catalog YOUR_CATALOG --data-backend warehouse
 ```
 
 That runs the full flow: auth check, warehouse select/create, catalog + schema
 + `app_settings`, upload app + notebooks, create the app, deploy it, grant the
 app's service principal access, create the 4-hourly scoring job, and start the
 first run. It prints the app URL at the end and takes roughly 5 minutes.
+
+With no `--warehouse` or `--warehouse-id`, it uses the workspace's first SQL
+warehouse (creating a small serverless one if there are none) and tells you which
+it picked. You are only prompted to choose when you are sitting at a terminal;
+piping the output or running from a script takes the default instead of hanging.
 
 Re-running the same command is safe. It reuses the app, the warehouse, the
 catalog, and the Lakebase instance, and updates the existing scoring job rather
@@ -115,10 +139,11 @@ console, federation) is still deploy.sh-only — see
 
 ## Troubleshooting
 
-- **"Could not create catalog"** — some metastores (accounts on Default
-  Storage) reject `CREATE CATALOG` without an explicit managed location. Create
-  the catalog in the UI, then re-run with `--catalog <that name>`. If the
-  catalog already exists, `deploy.py` never tries to create it.
+- **"Could not create catalog"** — you do not have `CREATE CATALOG` on the
+  metastore, or the account uses Default Storage and rejects `CREATE CATALOG`
+  without an explicit managed location. The error lists catalogs you can use;
+  re-run with one of those, or create one in the UI. If the catalog already
+  exists, `deploy.py` never tries to create it.
 - **Auth errors** — confirm `databricks auth login` succeeded
   (`databricks current-user me`), or that `--profile` / `DATABRICKS_HOST` +
   `DATABRICKS_TOKEN` are set.

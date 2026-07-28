@@ -136,6 +136,45 @@ def test_setup_unity_catalog_reraises_non_catalog_errors(monkeypatch):
         deploy.setup_unity_catalog(MagicMock(), "wh1", "quest_data", "quest")
 
 
+def test_suggest_catalogs_hides_builtins():
+    def catalog(name):
+        c = MagicMock()
+        c.name = name  # set after construction; MagicMock(name=...) is special
+        return c
+
+    w = MagicMock()
+    w.catalogs.list.return_value = [
+        catalog(n)
+        for n in ["system", "samples", "hive_metastore", "acme_data", "sandbox"]
+    ]
+    assert deploy.suggest_catalogs(w) == ["acme_data", "sandbox"]
+
+
+def test_suggest_catalogs_survives_a_listing_failure():
+    w = MagicMock()
+    w.catalogs.list.side_effect = Exception("permission denied")
+    assert deploy.suggest_catalogs(w) == []
+
+
+def test_catalog_failure_names_catalogs_the_user_can_use(monkeypatch):
+    # Someone new to Databricks has no idea what to pass instead, so the error
+    # has to name real options rather than just saying no.
+    import pytest
+
+    def fake_run(w, warehouse_id, statements):
+        if any("CREATE CATALOG" in s for s in statements):
+            raise RuntimeError("PERMISSION_DENIED: no CREATE CATALOG on Metastore")
+        raise RuntimeError("[NO_SUCH_CATALOG_EXCEPTION] Catalog not found")
+
+    monkeypatch.setattr(deploy, "run_uc_statements", fake_run)
+    monkeypatch.setattr(deploy, "suggest_catalogs", lambda w: ["acme_data", "sandbox"])
+    with pytest.raises(RuntimeError) as e:
+        deploy.setup_unity_catalog(MagicMock(), "wh1", "quest_data", "quest")
+    msg = str(e.value)
+    assert "acme_data" in msg and "sandbox" in msg
+    assert "--catalog acme_data" in msg  # a command they can copy
+
+
 def test_setup_unity_catalog_explains_default_storage_failure(monkeypatch):
     # Accounts on Default Storage reject a bare CREATE CATALOG; the deployer must
     # say what to do instead of surfacing the raw metastore error.
@@ -147,7 +186,8 @@ def test_setup_unity_catalog_explains_default_storage_failure(monkeypatch):
         raise RuntimeError("[NO_SUCH_CATALOG_EXCEPTION] Catalog not found")
 
     monkeypatch.setattr(deploy, "run_uc_statements", fake_run)
-    with pytest.raises(RuntimeError, match="create the catalog yourself"):
+    monkeypatch.setattr(deploy, "suggest_catalogs", lambda w: [])
+    with pytest.raises(RuntimeError, match="metastore admin"):
         deploy.setup_unity_catalog(MagicMock(), "wh1", "quest_data", "quest")
 
 
@@ -242,6 +282,43 @@ def test_resolve_warehouse_by_id_passthrough():
         == "wh-explicit"
     )
     w.warehouses.list.assert_not_called()
+
+
+def test_resolve_warehouse_defaults_when_stdin_is_not_a_tty(monkeypatch, capsys):
+    # Piping output or running in CI closes stdin. Prompting there aborts the
+    # whole deploy with a bare "EOF when reading a line".
+    class NoTty:
+        def isatty(self):
+            return False
+
+    def explode(*a, **k):
+        raise AssertionError("must not prompt without a terminal")
+
+    monkeypatch.setattr(deploy.sys, "stdin", NoTty())
+    monkeypatch.setattr("builtins.input", explode)
+    w = MagicMock()
+    wh = MagicMock()
+    wh.name, wh.id = "Starter", "wh-1"
+    w.warehouses.list.return_value = [wh]
+    assert deploy.resolve_warehouse(w, None, None, non_interactive=False) == "wh-1"
+    out = capsys.readouterr().out
+    assert "No interactive terminal" in out
+    assert "--warehouse" in out  # tells the user how to pick another
+
+
+def test_resolve_warehouse_prompts_when_attached_to_a_terminal(monkeypatch):
+    class Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(deploy.sys, "stdin", Tty())
+    monkeypatch.setattr("builtins.input", lambda *_: "2")
+    w = MagicMock()
+    a, b = MagicMock(), MagicMock()
+    a.name, a.id = "One", "wh-1"
+    b.name, b.id = "Two", "wh-2"
+    w.warehouses.list.return_value = [a, b]
+    assert deploy.resolve_warehouse(w, None, None, non_interactive=False) == "wh-2"
 
 
 def test_resolve_warehouse_by_name():

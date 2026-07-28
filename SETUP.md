@@ -1,14 +1,15 @@
 # Databricks Quest -- Deployment Guide
 
-This guide walks you through deploying Databricks Quest on any Databricks workspace. There are three ways to deploy:
+This guide walks you through deploying Databricks Quest on any Databricks workspace. There are four ways to deploy:
 
 | Method | Best For | Time | What It Does |
 |--------|----------|------|-------------|
-| **[Scripted Deploy](#scripted-deploy)** | Most users | ~15 min | One command handles everything |
+| **[Scripted Deploy](#scripted-deploy)** | Most users on macOS/Linux | ~15 min | One command handles everything |
+| **[Python Deploy](#python-deploy)** | Windows, or anywhere without bash/psql | ~5 min | Same flow, driven by the Databricks SDK |
 | **[Manual Deploy](#manual-deploy)** | Full control, restricted environments, learning | ~30 min | You run each step yourself |
 | **[Quick Deploy](#quick-deploy)** | Fast testing without DAB | ~10 min | App only, no scheduled scoring |
 
-All three methods produce the same result: a running Quest app with scored data.
+All of them produce the same result: a running Quest app with scored data. Only the scripted deploy sets up Event Mode (GameDay).
 
 ---
 
@@ -36,9 +37,9 @@ All three methods produce the same result: a running Quest app with scored data.
 
 | Tool | Version | How to Install | Required? |
 |------|---------|---------------|-----------|
-| Databricks CLI | v0.285+ | `brew install databricks/tap/databricks` (macOS) or [install guide](https://docs.databricks.com/en/dev-tools/cli/install.html) | Yes |
+| Databricks CLI | v0.285+ | `brew install databricks/tap/databricks` (macOS) or [install guide](https://docs.databricks.com/en/dev-tools/cli/install.html) | Yes for `deploy.sh`; the Python deploy only needs it to log in |
 | Node.js | v18+ | `brew install node` (macOS) or [nodejs.org](https://nodejs.org) | No (pre-built frontend included) |
-| psql | Any | `brew install postgresql@16` (macOS) or `apt install postgresql-client` (Linux) | Yes (for Lakebase) |
+| psql | Any | `brew install postgresql@16` (macOS) or `apt install postgresql-client` (Linux) | Yes for `deploy.sh` + Lakebase; not needed by the Python deploy |
 
 To check your versions:
 ```bash
@@ -121,6 +122,30 @@ If you know your settings ahead of time, skip all prompts:
 8. **Runs scoring pipeline** -- executes the scoring notebook once to populate data from system tables
 9. **Syncs to Lakebase** -- reads scored Delta tables and writes them to Lakebase for fast app reads
 10. **Prints app URL** -- shows where to open the app in your browser
+
+---
+
+## Python Deploy
+
+`deploy.sh` is bash and needs `psql`, so it does not run on Windows. `deploy.py` does the same deploy through the Databricks SDK: no bash, no `psql.exe`, no Terraform. It works the same on Windows, macOS, and Linux.
+
+```bash
+pip install -r requirements.txt
+databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
+python deploy.py --data-backend warehouse
+```
+
+It asks which SQL warehouse and which Unity Catalog to use, listing what you already have so you can pick an existing catalog or name a new one. Pass `--catalog NAME` to skip that question, which is required with `--non-interactive`.
+
+From there it creates the schema and `app_settings` table, uploads the app and notebooks, creates and deploys the Databricks App, grants the app's service principal access to Unity Catalog and the warehouse, creates the 4-hourly scoring job, and starts the first run. Re-running it is safe: the app, warehouse, catalog, Lakebase instance, and scoring job are all reused rather than duplicated.
+
+Differences from the scripted deploy:
+
+- It does not use Databricks Asset Bundles, so there is no bundle state to manage.
+- It does not build the frontend; it ships the pre-built `app/static/`.
+- It covers Adoption Mode only. For Event Mode (GameDay), use `deploy.sh --event-mode`.
+
+Full reference, including every flag and the Windows prerequisites: **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
 ---
 
@@ -254,35 +279,89 @@ This takes 2-10 minutes depending on workspace size.
 
 ### Step 9: Create a scheduled job (recommended)
 
-To keep data fresh, create a job that runs the scoring pipeline every 4 hours:
+To keep data fresh, create a job that runs every 4 hours. It has four tasks, not one. `run_scoring` only writes Delta; `sync_to_lakebase` is what copies those rows into the database the app reads, so a Lakebase deployment with only `run_scoring` shows zeros forever.
+
+Leave `lakebase_host` empty for now. If you are using the SQL warehouse backend, leave it empty permanently and the two Lakebase tasks will skip themselves. If you are provisioning Lakebase in Step 10, come back and set it to the endpoint host you get there.
 
 ```bash
 databricks jobs create --json '{
-  "name": "[Quest] Scoring Pipeline",
-  "tasks": [{
-    "task_key": "run_scoring",
-    "notebook_task": {
-      "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/scoring_pipeline",
-      "base_parameters": {
-        "quest_catalog": "quest_data",
-        "quest_schema": "quest",
-        "app_name": "databricks-quest",
-        "warehouse_id": "YOUR_WAREHOUSE_ID"
+  "name": "[Quest] Scoring Pipeline (databricks-quest)",
+  "max_concurrent_runs": 1,
+  "queue": {"enabled": true},
+  "tasks": [
+    {
+      "task_key": "roundtrip_attestations",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/roundtrip_attestations",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "lakebase_host": "",
+          "lakebase_db": "quest_db"
+        },
+        "source": "WORKSPACE"
       },
-      "source": "WORKSPACE"
+      "environment_key": "default"
     },
-    "environment_key": "default"
-  }],
+    {
+      "task_key": "run_scoring",
+      "depends_on": [{"task_key": "roundtrip_attestations"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/scoring_pipeline",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "warehouse_id": "YOUR_WAREHOUSE_ID"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    },
+    {
+      "task_key": "sync_to_lakebase",
+      "depends_on": [{"task_key": "run_scoring"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/lakebase_sync",
+        "base_parameters": {
+          "quest_catalog": "quest_data",
+          "quest_schema": "quest",
+          "app_name": "databricks-quest",
+          "lakebase_host": "",
+          "lakebase_db": "quest_db"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    },
+    {
+      "task_key": "warm_warehouse",
+      "depends_on": [{"task_key": "run_scoring"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/YOUR_EMAIL/databricks-quest/notebooks/warm_warehouse",
+        "base_parameters": {
+          "quest_data_backend": "lakebase",
+          "warehouse_id": "YOUR_WAREHOUSE_ID"
+        },
+        "source": "WORKSPACE"
+      },
+      "environment_key": "default"
+    }
+  ],
   "environments": [{
     "environment_key": "default",
-    "spec": {"client": "1"}
+    "spec": {"client": "1", "dependencies": ["psycopg2-binary"]}
   }],
   "schedule": {
     "quartz_cron_expression": "0 0 */4 * * ?",
-    "timezone_id": "UTC"
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
   }
 }'
 ```
+
+Three details that matter. `psycopg2-binary` is declared because the two Lakebase tasks import it and serverless does not preinstall it. `max_concurrent_runs: 1` stops an overlapping run from colliding with the scoring notebook's whole-table DELETE and re-INSERT on a Delta `ConcurrentDeleteReadException`. Set `quest_data_backend` on `warm_warehouse` to `warehouse` if that is the backend you are running, otherwise it skips itself.
 
 ### Step 10: Provision Lakebase
 
@@ -343,6 +422,13 @@ CREATE TABLE IF NOT EXISTS notifications (
   id SERIAL PRIMARY KEY, user_id TEXT, notification_type TEXT, title TEXT,
   message TEXT, mission_id TEXT, points INT, created_at TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS training_attestations (
+  user_id TEXT, course_mission_id TEXT, course_id TEXT, attested_at TIMESTAMP,
+  UNIQUE (user_id, course_mission_id)
+);
 CREATE INDEX IF NOT EXISTS idx_mc_user ON mission_completions(user_id);
 CREATE INDEX IF NOT EXISTS idx_lb_rank ON leaderboard(all_time_rank);
 CREATE INDEX IF NOT EXISTS idx_ups_user ON user_profile_snapshot(user_id);
@@ -350,6 +436,8 @@ CREATE INDEX IF NOT EXISTS idx_badges_user ON badges(user_id);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);
 "
 ```
+
+All eight tables matter. The six scored ones are overwritten by the sync each cycle. `app_settings` holds the Admin page's data-backend toggle, and `training_attestations` is the durable record behind the Get Started tick-box: the `roundtrip_attestations` job task reads it on every run and the whole scoring job fails if it is missing.
 
 ### Step 11: Grant the app's service principal Lakebase access
 
@@ -362,12 +450,17 @@ databricks postgres create-role projects/databricks-quest/branches/production \
   --role-id quest-sp \
   --json '{"spec": {"identity_type": "SERVICE_PRINCIPAL", "postgres_role": "SP_CLIENT_ID", "auth_method": "LAKEBASE_OAUTH_V1", "membership_roles": ["DATABRICKS_SUPERUSER"]}}'
 
-# Grant SELECT on tables
+# Grant SELECT on tables, plus writes on the two tables the app writes itself
 PGPASSWORD="YOUR_TOKEN" psql \
   "host=YOUR_LAKEBASE_HOST port=5432 dbname=quest_db user=YOUR_EMAIL sslmode=require" \
   -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"SP_CLIENT_ID\";
-      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"SP_CLIENT_ID\";"
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO \"SP_CLIENT_ID\";
+      GRANT CREATE ON SCHEMA public TO \"SP_CLIENT_ID\";
+      GRANT SELECT, INSERT, UPDATE ON app_settings TO \"SP_CLIENT_ID\";
+      GRANT SELECT, INSERT, UPDATE ON training_attestations TO \"SP_CLIENT_ID\";"
 ```
+
+Read access alone is not enough. The app writes `app_settings` when an admin switches the data backend and `training_attestations` when a user ticks a Get Started course, and it needs `CREATE` on the schema to make its own `quest_admins` table. Granting these explicitly avoids depending on the `DATABRICKS_SUPERUSER` membership above, which has silently failed to apply on some workspaces.
 
 ### Step 12: Update app.yaml with Lakebase config
 

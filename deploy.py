@@ -121,7 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace URL (used when no profile/env auth is configured).",
     )
     p.add_argument(
-        "--catalog", default="", help="Unity Catalog name for Quest data."
+        "--catalog",
+        default="",
+        help=(
+            "Unity Catalog for Quest's scored tables. Omit it and you are asked "
+            "to pick an existing catalog or name a new one (required with "
+            "--non-interactive)."
+        ),
     )
     p.add_argument("--schema", default="quest", help="Schema name for Quest tables.")
     p.add_argument(
@@ -256,6 +262,15 @@ def uc_schema_statements(catalog: str, schema: str) -> List[str]:
     ]
 
 
+def can_prompt(non_interactive: bool) -> bool:
+    """True when there is a human at a terminal to answer a question.
+
+    Piping the output to a file, or running from CI, leaves stdin closed, and
+    ``input()`` there aborts the deploy with a bare "EOF when reading a line".
+    """
+    return not non_interactive and sys.stdin is not None and sys.stdin.isatty()
+
+
 def is_missing_catalog_error(exc: Exception) -> bool:
     """True when a statement failed only because the catalog does not exist."""
     return "NO_SUCH_CATALOG" in str(exc).upper()
@@ -278,7 +293,55 @@ def suggest_catalogs(w, limit: int = 8) -> List[str]:
     return [n for n in names if n not in _BUILTIN_CATALOGS][:limit]
 
 
-def setup_unity_catalog(w, warehouse_id: str, catalog: str, schema: str) -> None:
+DEFAULT_NEW_CATALOG = "quest_data"
+
+
+def resolve_catalog(w, catalog: Optional[str], non_interactive: bool) -> str:
+    """Decide which Unity Catalog to use, asking when nothing was passed.
+
+    Someone new to Databricks does not know what to put in ``--catalog``, so when
+    it is omitted list the catalogs they can already see and let them pick one or
+    name a new one. Anyone who passed ``--catalog`` is taken at their word, and a
+    non-interactive run without it still fails fast rather than guessing.
+    """
+    if catalog:
+        return catalog
+
+    if not can_prompt(non_interactive):
+        raise RuntimeError(
+            "--catalog is required (the Unity Catalog for Quest's scored tables).\n"
+            "    Re-run with --catalog NAME, or run it interactively to be asked."
+        )
+
+    options = suggest_catalogs(w)
+    print("\n  Quest stores its scored tables in a Unity Catalog catalog.")
+    if options:
+        print("  Use an existing catalog, or create a new one:\n")
+        for i, name in enumerate(options, 1):
+            print(f"    {i}) {name}")
+        print(f"    n) create a new catalog")
+        choice = input("\n  Choose [1]: ").strip() or "1"
+        if choice.lower() not in ("n", "new"):
+            try:
+                idx = int(choice) - 1
+            except ValueError:
+                idx = -1
+            if not 0 <= idx < len(options):
+                raise RuntimeError(f"Invalid catalog selection: {choice!r}")
+            log_ok(f"Using existing catalog '{options[idx]}'")
+            return options[idx]
+    else:
+        print("  You have no catalogs yet, so Quest will create one.")
+
+    name = input(f"  New catalog name [{DEFAULT_NEW_CATALOG}]: ").strip()
+    name = name or DEFAULT_NEW_CATALOG
+    log_info(f"Will create catalog '{name}' (needs CREATE CATALOG on the metastore).")
+    return name
+
+
+def setup_unity_catalog(
+    w, warehouse_id: str, catalog: str, schema: str, confirm_missing: bool = False
+) -> None:
     """Create the Quest schema, creating the catalog first only if it is missing.
 
     Schema-first mirrors deploy.sh. Most deploying identities have CREATE SCHEMA
@@ -293,6 +356,19 @@ def setup_unity_catalog(w, warehouse_id: str, catalog: str, schema: str) -> None
     except RuntimeError as exc:
         if not is_missing_catalog_error(exc):
             raise
+
+    # Only worth asking when the name came from --catalog: creating a catalog is
+    # a metastore-level change and a typo should not silently make a second one.
+    # Someone who just picked "create a new catalog" has already answered this.
+    if confirm_missing:
+        answer = input(
+            f"\n  Catalog '{catalog}' does not exist. Create it? [Y/n]: "
+        ).strip().lower()
+        if answer in ("n", "no"):
+            raise RuntimeError(
+                f"Stopped: catalog '{catalog}' does not exist and was not created.\n"
+                f"    Re-run with --catalog pointing at an existing catalog."
+            )
 
     log_info(f"Catalog '{catalog}' not found -- creating it...")
     try:
@@ -478,12 +554,7 @@ def resolve_warehouse(
                 return wh.id
         raise RuntimeError(f"No warehouse found matching name: {name!r}")
 
-    # Only prompt when someone is actually there to answer. Piping the output to
-    # a file, or running from CI, leaves stdin closed, and input() would abort the
-    # deploy with a bare "EOF when reading a line".
-    can_prompt = not non_interactive and sys.stdin is not None and sys.stdin.isatty()
-
-    if warehouses and can_prompt:
+    if warehouses and can_prompt(non_interactive):
         print("\n  Available SQL Warehouses:")
         for i, wh in enumerate(warehouses, 1):
             print(f"    {i}) {wh.name} ({wh.id})")
@@ -1131,9 +1202,6 @@ def run(cfg: Config) -> int:
 
     # ── Step 1: prerequisites + client ────────────────────────────────────────
     log_step(1, TOTAL_STEPS, "Checking prerequisites and connecting")
-    if not cfg.catalog:
-        log_err("--catalog is required (the Unity Catalog for Quest data).")
-        return 2
     w = get_client(cfg.profile, cfg.host)
 
     # ── Step 2: identity ──────────────────────────────────────────────────────
@@ -1152,8 +1220,14 @@ def run(cfg: Config) -> int:
     log_ok(f"Using warehouse {warehouse_id}")
 
     # ── Step 4: Unity Catalog setup ───────────────────────────────────────────
-    log_step(4, TOTAL_STEPS, f"Setting up Unity Catalog {cfg.catalog}.{cfg.schema}")
-    setup_unity_catalog(w, warehouse_id, cfg.catalog, cfg.schema)
+    log_step(4, TOTAL_STEPS, "Setting up Unity Catalog")
+    named_by_flag = bool(cfg.catalog)
+    cfg.catalog = resolve_catalog(w, cfg.catalog, cfg.non_interactive)
+    log_info(f"Target: {cfg.catalog}.{cfg.schema}")
+    setup_unity_catalog(
+        w, warehouse_id, cfg.catalog, cfg.schema,
+        confirm_missing=named_by_flag and can_prompt(cfg.non_interactive),
+    )
     log_ok("Catalog, schema, and app_settings ready")
 
     # ── Step 5: upload app source (+ notebooks when present) ──────────────────

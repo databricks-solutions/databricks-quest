@@ -41,28 +41,49 @@ cd databricks-quest
 (No Git? Download the ZIP from the repo's green "Code" button and extract it.
 The frontend ships pre-built, so there is nothing to build.)
 
-## Pick a catalog first
+## Choosing a catalog
 
-Quest writes its scored tables into a Unity Catalog catalog, and you have to say
-which one. Point `--catalog` at a catalog **you can already create schemas in**.
+Quest stores its scored tables in a Unity Catalog catalog. You do not need to
+know which one up front. Leave `--catalog` off and the deploy asks:
 
-Most people cannot create a new catalog: that needs `CREATE CATALOG` on the
-metastore, which is usually an admin-only privilege. If the catalog you name does
-not exist, `deploy.py` tries to create it, and when that is refused it stops
-before changing anything and lists the catalogs you do have access to, so you can
-re-run with one of them.
+```
+  Quest stores its scored tables in a Unity Catalog catalog.
+  Use an existing catalog, or create a new one:
 
-If you are not sure, open **Catalog** in the workspace sidebar and pick one your
-team already uses, or ask an admin to run:
+    1) analytics_dev
+    2) sandbox
+    n) create a new catalog
+
+  Choose [1]:
+```
+
+Picking an existing catalog is the safe default, and it has to be one you can
+create schemas in. Choosing `n` lets you name a new one, but creating a catalog
+needs `CREATE CATALOG` on the metastore, which is usually admin-only; if that is
+refused the deploy stops before changing anything and lists the catalogs you can
+use instead.
+
+Not sure? Open **Catalog** in the workspace sidebar and pick one your team
+already uses, or ask an admin to run:
 
 ```sql
 CREATE CATALOG IF NOT EXISTS quest_data;
 GRANT USE CATALOG, CREATE SCHEMA ON CATALOG quest_data TO `you@example.com`;
 ```
 
+`--catalog NAME` skips the question, and it is required with
+`--non-interactive`. If a catalog you name does not exist, you are asked once
+before it gets created, so a typo cannot quietly make a second catalog.
+
 ## Deploy
 
 The simplest, most portable option — **warehouse backend** (no Lakebase):
+
+```
+python deploy.py --data-backend warehouse
+```
+
+Or name the catalog yourself and skip the question:
 
 ```
 python deploy.py --catalog YOUR_CATALOG --data-backend warehouse
@@ -108,7 +129,7 @@ warehouse and the catalog.
 
 | Flag | What it does | Default |
 |------|--------------|---------|
-| `--catalog NAME` | Unity Catalog for Quest data | (required) |
+| `--catalog NAME` | Unity Catalog for Quest data | ask (required with `--non-interactive`) |
 | `--schema NAME` | Schema for Quest tables | `quest` |
 | `--app-name NAME` | Databricks App name | `databricks-quest` |
 | `--data-backend {lakebase,warehouse}` | Deploy-time default backend | `lakebase` |

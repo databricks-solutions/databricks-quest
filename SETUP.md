@@ -132,10 +132,12 @@ If you know your settings ahead of time, skip all prompts:
 ```bash
 pip install -r requirements.txt
 databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
-python deploy.py --catalog quest_data --data-backend warehouse
+python deploy.py --data-backend warehouse
 ```
 
-It creates the schema and `app_settings` table, uploads the app and notebooks, creates and deploys the Databricks App, grants the app's service principal access to Unity Catalog and the warehouse, creates the 4-hourly scoring job, and starts the first run. Re-running it is safe: the app, warehouse, catalog, Lakebase instance, and scoring job are all reused rather than duplicated.
+It asks which SQL warehouse and which Unity Catalog to use, listing what you already have so you can pick an existing catalog or name a new one. Pass `--catalog NAME` to skip that question, which is required with `--non-interactive`.
+
+From there it creates the schema and `app_settings` table, uploads the app and notebooks, creates and deploys the Databricks App, grants the app's service principal access to Unity Catalog and the warehouse, creates the 4-hourly scoring job, and starts the first run. Re-running it is safe: the app, warehouse, catalog, Lakebase instance, and scoring job are all reused rather than duplicated.
 
 Differences from the scripted deploy:
 

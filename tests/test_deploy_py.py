@@ -136,6 +136,144 @@ def test_setup_unity_catalog_reraises_non_catalog_errors(monkeypatch):
         deploy.setup_unity_catalog(MagicMock(), "wh1", "quest_data", "quest")
 
 
+def _stdin(monkeypatch, tty: bool):
+    class Fake:
+        def isatty(self):
+            return tty
+
+    monkeypatch.setattr(deploy.sys, "stdin", Fake())
+
+
+def _answers(monkeypatch, *replies):
+    it = iter(replies)
+    monkeypatch.setattr("builtins.input", lambda *_: next(it))
+
+
+def _catalog_client(*names):
+    def catalog(n):
+        c = MagicMock()
+        c.name = n
+        return c
+
+    w = MagicMock()
+    w.catalogs.list.return_value = [catalog(n) for n in names]
+    return w
+
+
+def test_resolve_catalog_respects_an_explicit_flag(monkeypatch):
+    # --catalog means "use this"; never second-guess it with a prompt.
+    def explode(*a, **k):
+        raise AssertionError("should not prompt when --catalog was given")
+
+    monkeypatch.setattr("builtins.input", explode)
+    w = MagicMock()
+    assert deploy.resolve_catalog(w, "acme_data", non_interactive=False) == "acme_data"
+    w.catalogs.list.assert_not_called()
+
+
+def test_resolve_catalog_offers_existing_catalogs(monkeypatch):
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "2")
+    w = _catalog_client("acme_data", "sandbox", "system")
+    assert deploy.resolve_catalog(w, None, non_interactive=False) == "sandbox"
+
+
+def test_resolve_catalog_defaults_to_the_first_option(monkeypatch):
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "")  # bare Enter
+    w = _catalog_client("acme_data", "sandbox")
+    assert deploy.resolve_catalog(w, None, non_interactive=False) == "acme_data"
+
+
+def test_resolve_catalog_can_create_a_new_one(monkeypatch):
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "n", "quest_prod")
+    w = _catalog_client("acme_data")
+    assert deploy.resolve_catalog(w, None, non_interactive=False) == "quest_prod"
+
+
+def test_resolve_catalog_new_name_has_a_default(monkeypatch):
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "n", "")
+    w = _catalog_client("acme_data")
+    assert (
+        deploy.resolve_catalog(w, None, non_interactive=False)
+        == deploy.DEFAULT_NEW_CATALOG
+    )
+
+
+def test_resolve_catalog_prompts_for_a_name_when_none_exist(monkeypatch):
+    # No existing catalogs means there is nothing to choose between.
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "brand_new")
+    w = _catalog_client("system", "samples")
+    assert deploy.resolve_catalog(w, None, non_interactive=False) == "brand_new"
+
+
+def test_resolve_catalog_rejects_a_bad_selection(monkeypatch):
+    import pytest
+
+    _stdin(monkeypatch, True)
+    _answers(monkeypatch, "9")
+    w = _catalog_client("acme_data")
+    with pytest.raises(RuntimeError, match="Invalid catalog selection"):
+        deploy.resolve_catalog(w, None, non_interactive=False)
+
+
+def test_resolve_catalog_still_requires_the_flag_non_interactively(monkeypatch):
+    import pytest
+
+    _stdin(monkeypatch, False)
+    with pytest.raises(RuntimeError, match="--catalog is required"):
+        deploy.resolve_catalog(MagicMock(), None, non_interactive=True)
+
+
+def _missing_then_ok(monkeypatch):
+    calls = []
+
+    def fake_run(w, warehouse_id, statements):
+        calls.append(list(statements))
+        if len(calls) == 1:
+            raise RuntimeError("[NO_SUCH_CATALOG_EXCEPTION] Catalog not found")
+
+    monkeypatch.setattr(deploy, "run_uc_statements", fake_run)
+    return calls
+
+
+def test_setup_unity_catalog_confirms_a_flag_named_catalog(monkeypatch):
+    # A typo in --catalog should not silently create a second catalog.
+    import pytest
+
+    _answers(monkeypatch, "n")
+    _missing_then_ok(monkeypatch)
+    with pytest.raises(RuntimeError, match="was not created"):
+        deploy.setup_unity_catalog(
+            MagicMock(), "wh1", "typoed_catalog", "quest", confirm_missing=True
+        )
+
+
+def test_setup_unity_catalog_creates_after_confirmation(monkeypatch):
+    _answers(monkeypatch, "")  # bare Enter accepts the [Y/n] default
+    calls = _missing_then_ok(monkeypatch)
+    deploy.setup_unity_catalog(
+        MagicMock(), "wh1", "quest_data", "quest", confirm_missing=True
+    )
+    assert "CREATE CATALOG IF NOT EXISTS quest_data" in calls[1]
+
+
+def test_setup_unity_catalog_does_not_double_ask(monkeypatch):
+    # Someone who just chose "create a new catalog" already answered this.
+    def explode(*a, **k):
+        raise AssertionError("should not ask twice")
+
+    monkeypatch.setattr("builtins.input", explode)
+    calls = _missing_then_ok(monkeypatch)
+    deploy.setup_unity_catalog(
+        MagicMock(), "wh1", "quest_data", "quest", confirm_missing=False
+    )
+    assert "CREATE CATALOG IF NOT EXISTS quest_data" in calls[1]
+
+
 def test_suggest_catalogs_hides_builtins():
     def catalog(name):
         c = MagicMock()

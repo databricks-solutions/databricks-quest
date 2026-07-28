@@ -54,7 +54,7 @@ Full instructions: **[SETUP.md](SETUP.md)** -- covers four deployment methods:
 | **Manual** (step-by-step) | Full control, restricted environments | ~30 min |
 | **Quick** (`./deploy.sh --quick`) | Fast testing without DAB | ~10 min |
 
-On Windows or any OS without bash, `python deploy.py --catalog <name> --data-backend warehouse` runs the whole deploy through the Databricks SDK: no bash, no `psql`, no Terraform. It covers Adoption Mode; Event Mode still needs `deploy.sh`. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
+On Windows or any OS without bash, `python deploy.py --data-backend warehouse` runs the whole deploy through the Databricks SDK: no bash, no `psql`, no Terraform. It asks which Unity Catalog to use, or takes `--catalog <name>`. It covers Adoption Mode; Event Mode still needs `deploy.sh`. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
 Quick start:
 

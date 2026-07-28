@@ -1,0 +1,26 @@
+# Databricks Quest -- deploy.py dependencies
+#
+# Install with:  pip install -r requirements.txt
+#
+# These are the only packages deploy.py needs. Everything else it uses
+# (argparse, re, sys, base64, uuid, time, pathlib, dataclasses, typing) is in
+# the Python 3.9+ standard library.
+#
+# For the SQL-warehouse backend you technically only need databricks-sdk and
+# PyYAML; psycopg2-binary is imported lazily and only used by
+# --data-backend lakebase. It is listed here so a single install covers both
+# backends. It is a prebuilt wheel, so there is no PostgreSQL install to do.
+
+# Drives every Databricks REST call (auth, warehouses, apps, jobs, UC, Lakebase).
+# deploy.py handles the Lakebase API group under both its old name
+# (w.database_instances, <=0.55) and its new one (w.database, >=0.56), so any
+# reasonably recent release works. 0.54 is the floor where the Lakebase API
+# first appears.
+databricks-sdk>=0.54
+
+# Renders app/app.yaml.
+PyYAML>=6.0
+
+# Lakebase Postgres driver (DDL, grants). Only imported for the lakebase
+# backend. Binary wheel -- no local PostgreSQL/libpq build required.
+psycopg2-binary>=2.9

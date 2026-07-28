@@ -14,10 +14,12 @@ macOS, and Linux.
     on your PATH.
 - **Python packages:**
   ```
-  pip install databricks-sdk psycopg2-binary PyYAML
+  pip install -r requirements.txt
   ```
-  (These are the same packages Quest's app uses. `psycopg2-binary` is a wheel —
-  no PostgreSQL install needed.)
+  (That is `databricks-sdk`, `PyYAML`, and `psycopg2-binary` — pinned in
+  `requirements.txt` at the repo root. `psycopg2-binary` is a wheel, so there is
+  no PostgreSQL install needed. If you only ever use `--data-backend warehouse`
+  you can skip `psycopg2-binary`, but the one-line install covers both backends.)
 
 ## Authenticate
 

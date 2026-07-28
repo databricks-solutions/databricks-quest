@@ -130,7 +130,7 @@ If you know your settings ahead of time, skip all prompts:
 `deploy.sh` is bash and needs `psql`, so it does not run on Windows. `deploy.py` does the same deploy through the Databricks SDK: no bash, no `psql.exe`, no Terraform. It works the same on Windows, macOS, and Linux.
 
 ```bash
-pip install databricks-sdk psycopg2-binary PyYAML
+pip install -r requirements.txt
 databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
 python deploy.py --catalog quest_data --data-backend warehouse
 ```

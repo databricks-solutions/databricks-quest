@@ -109,17 +109,21 @@
     .code .c{color:var(--dim)}
     .cta-box{text-align:center;background:linear-gradient(180deg,rgba(255,95,31,.10),rgba(255,255,255,.02));border:1px solid rgba(255,95,31,.25);border-radius:24px;padding:56px 24px}
 
-    /* deploy options */
-    .deploy-opts{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;max-width:940px;margin:28px auto 0;text-align:left}
-    .deploy-opt{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:18px;padding:20px}
-    .deploy-label{font-weight:700;font-size:14px;display:flex;align-items:center;gap:10px}
-    .deploy-label span{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:600;color:var(--orange-2);background:rgba(255,95,31,.12);border:1px solid rgba(255,95,31,.25);border-radius:999px;padding:3px 9px}
-    .deploy-opt .code{margin-top:0;font-size:12.5px}
-    .deploy-step{max-width:940px;margin:30px auto 0;text-align:left;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
-    .deploy-body{color:var(--muted);font-size:13.5px;line-height:1.65;margin-top:10px}
-    .deploy-note{max-width:760px;margin:24px auto 0;color:var(--muted);font-size:14.5px;line-height:1.7}
+    /* deploy — one card, backend chosen by tabs */
+    .deploy-card{max-width:720px;margin:30px auto 0;text-align:left;background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+    .deploy-tabs{display:flex;gap:6px;padding:8px;background:rgba(255,255,255,.02);border-bottom:1px solid var(--line)}
+    .deploy-tab{flex:1;display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:12px 16px;border-radius:12px;border:1px solid transparent;background:none;color:var(--muted);font:inherit;cursor:pointer;transition:all .15s}
+    .deploy-tab:hover{background:rgba(255,255,255,.03);color:var(--text)}
+    .deploy-tab.active{background:rgba(255,95,31,.10);border-color:rgba(255,95,31,.28);color:var(--text)}
+    .deploy-tab b{font-size:14px;font-weight:700}
+    .deploy-tab span{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:11px;color:var(--orange-2)}
+    .deploy-panel{padding:22px}
+    .deploy-panel[hidden]{display:none}
+    .deploy-panel .code{margin-top:16px;font-size:12.5px}
+    .deploy-body{color:var(--muted);font-size:13.5px;line-height:1.65;margin:0}
+    .deploy-note{max-width:720px;margin:22px auto 0;text-align:left;color:var(--muted);font-size:14px;line-height:1.7}
     .deploy-note code{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--text);background:rgba(255,255,255,.06);border-radius:6px;padding:2px 6px}
-    @media(max-width:860px){.deploy-opts{grid-template-columns:1fr}}
+    @media(max-width:560px){.deploy-tabs{flex-direction:column}}
     footer{border-top:1px solid var(--line);padding:36px 0;color:var(--dim);font-size:13.5px;text-align:center}
     footer a{color:var(--muted)}
     footer a:hover{color:var(--text)}
@@ -276,71 +280,56 @@
   <div class="cta-box">
     <div class="section-head" style="margin-bottom:8px">
       <h2>Deploy Quest in your workspace</h2>
-      <p>One command handles the app, the scoring job and the data backend. Two choices: how you run it, and where the app reads from.</p>
+      <p>One command handles the app, the scoring job and the data backend. Run it the same way on macOS, Windows or Linux — just pick where the app reads from.</p>
     </div>
 
-    <div class="deploy-step">1 &nbsp;Pick how you run it</div>
-    <div class="deploy-opts">
-      <div class="deploy-opt">
-        <div class="deploy-label">macOS &amp; Linux <span>bash</span></div>
-        <div class="code" style="margin-top:12px;text-align:left">
-          <span class="c"># needs bash + psql</span><br/>
-          git clone https://github.com/databricks-solutions/databricks-quest.git<br/>
-          cd databricks-quest<br/>
-          ./deploy.sh --catalog &lt;your_catalog&gt;
-        </div>
+    <div class="deploy-card">
+      <div class="deploy-tabs" role="tablist" aria-label="Data backend">
+        <button class="deploy-tab active" role="tab" aria-selected="true" aria-controls="dp-lakebase" id="tab-lakebase" onclick="showDeploy('lakebase')">
+          <b>With Lakebase</b><span>--data-backend lakebase</span>
+        </button>
+        <button class="deploy-tab" role="tab" aria-selected="false" aria-controls="dp-warehouse" id="tab-warehouse" onclick="showDeploy('warehouse')">
+          <b>Without Lakebase</b><span>--data-backend warehouse</span>
+        </button>
       </div>
 
-      <div class="deploy-opt">
-        <div class="deploy-label">Windows, or any OS <span>python</span></div>
-        <div class="code" style="margin-top:12px;text-align:left">
+      <div class="deploy-panel" id="dp-lakebase" role="tabpanel" aria-labelledby="tab-lakebase">
+        <p class="deploy-body">Provisions a Lakebase Postgres instance and syncs the scored tables into it after every run. Reads land in single-digit milliseconds instead of hundreds. Adds roughly five minutes to the first deploy. This is the default.</p>
+        <div class="code">
           <span class="c"># no bash, no psql, no Terraform — just the Databricks SDK</span><br/>
           git clone https://github.com/databricks-solutions/databricks-quest.git<br/>
           cd databricks-quest<br/>
           pip install -r requirements.txt<br/>
           databricks auth login --host &lt;your_workspace_url&gt;<br/>
-          python deploy.py
+          python deploy.py <span class="c"># --data-backend lakebase is the default</span>
         </div>
       </div>
-    </div>
 
-    <div class="deploy-step">2 &nbsp;Pick where the app reads from</div>
-    <div class="deploy-opts">
-      <div class="deploy-opt">
-        <div class="deploy-label">Without Lakebase <span>--data-backend warehouse</span></div>
+      <div class="deploy-panel" id="dp-warehouse" role="tabpanel" aria-labelledby="tab-warehouse" hidden>
         <p class="deploy-body">The app reads the scored Delta tables straight through a serverless SQL warehouse. Nothing extra to provision and nothing to sync, so it is the quickest way to stand up and the least to run.</p>
-        <div class="code" style="margin-top:12px;text-align:left">
+        <div class="code">
+          <span class="c"># no bash, no psql, no Terraform — just the Databricks SDK</span><br/>
+          git clone https://github.com/databricks-solutions/databricks-quest.git<br/>
+          cd databricks-quest<br/>
+          pip install -r requirements.txt<br/>
+          databricks auth login --host &lt;your_workspace_url&gt;<br/>
           python deploy.py --data-backend warehouse
-        </div>
-      </div>
-
-      <div class="deploy-opt">
-        <div class="deploy-label">With Lakebase <span>--data-backend lakebase</span></div>
-        <p class="deploy-body">Provisions a Lakebase Postgres instance and syncs the scored tables into it after every run. Reads land in single-digit milliseconds instead of hundreds. Adds roughly five minutes to the first deploy.</p>
-        <div class="code" style="margin-top:12px;text-align:left">
-          <span class="c"># lakebase is the default, so the flag is optional</span><br/>
-          python deploy.py --data-backend lakebase
         </div>
       </div>
     </div>
 
     <p class="deploy-note">
       Either way an admin can switch the live backend later under <strong>Admin → Data
-      Backend</strong>, with no redeploy. Both deploys take about five minutes and are safe
-      to re-run. The Python installer asks which SQL warehouse and Unity Catalog to use,
+      Backend</strong>, with no redeploy. The deploy takes about five minutes and is safe
+      to re-run. <code>deploy.py</code> asks which SQL warehouse and Unity Catalog to use,
       so you can pick an existing catalog or create a new one — pass
-      <code>--catalog &lt;name&gt;</code> to skip the question.
-      <br/><br/>
-      Two things to know: only <code>deploy.py</code> can skip Lakebase entirely —
-      <code>deploy.sh</code> provisions it either way and the flag just picks which backend
-      serves reads. And <code>deploy.py</code> covers Adoption Mode, so GameDay Event Mode
-      still needs <code>deploy.sh --event-mode</code>.
+      <code>--catalog &lt;name&gt;</code> to skip the question. It covers Adoption Mode, so
+      GameDay Event Mode still needs <code>deploy.sh --event-mode</code>.
     </p>
 
     <div class="cta" style="justify-content:center;margin-top:26px">
       <a class="btn btn-primary" href="https://github.com/databricks-solutions/databricks-quest" target="_blank" rel="noreferrer">Get the code →</a>
       <a class="btn" href="https://github.com/databricks-solutions/databricks-quest/blob/main/SETUP.md" target="_blank" rel="noreferrer">Read the setup guide</a>
-      <a class="btn" href="https://github.com/databricks-solutions/databricks-quest/blob/main/docs/WINDOWS_DEPLOY.md" target="_blank" rel="noreferrer">Windows guide</a>
     </div>
   </div>
 </section>
@@ -351,6 +340,19 @@
     <p style="margin-top:8px"><a href="https://github.com/databricks-solutions/databricks-quest">github.com/databricks-solutions/databricks-quest</a></p>
   </div>
 </footer>
+
+<script>
+  function showDeploy(which){
+    var opts = ['lakebase','warehouse'];
+    opts.forEach(function(o){
+      var active = o === which;
+      document.getElementById('dp-' + o).hidden = !active;
+      var tab = document.getElementById('tab-' + o);
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+</script>
 
 </body>
 </html>

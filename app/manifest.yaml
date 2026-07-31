@@ -1,0 +1,37 @@
+# Databricks Quest — Marketplace app manifest
+# Belongs at: app/manifest.yaml (same folder as app.yaml), per the Marketplace SOP.
+# Schema + field values verified against databricks/app-templates and databricks-sdk-py
+# (AppManifestAppResource* enums). version must be 1.
+version: 1
+name: "Databricks Quest"
+description: "Turn Databricks platform adoption into a game. Quest reads Unity Catalog system tables to score 40+ missions across Data Engineering, Analytics, AI/ML, Streaming and Consumption, then shows each user their points, tiers, streaks, badges and a weekly leaderboard — all served from a Databricks App."
+
+resource_specs:
+  # The app queries the scored Delta tables through a serverless SQL warehouse.
+  # Always required: it backs the warehouse data-backend and the runtime
+  # Admin -> Data Backend toggle, and it is how the app reads Unity Catalog.
+  - name: "sql-warehouse"
+    description: "The SQL warehouse the app uses to read Quest's scored tables from Unity Catalog."
+    sql_warehouse_spec:
+      permission: "CAN_USE"
+
+  # Lakebase (Postgres) read model for sub-second dashboard reads. Used when the
+  # app runs on the default Lakebase data backend. CAN_CONNECT_AND_CREATE matches
+  # deploy-time behaviour: the app connects and its tables are created/synced.
+  #
+  # NOTE for the Marketplace team: the current Apps manifest SDK schema
+  # (AppManifestAppResourceSpec) models this as `postgres_spec`, so we use that
+  # here — it is guaranteed to validate. The official `appkit-lakebase` /
+  # `appkit-all-in-one` templates also use `postgres_spec`. Some older official
+  # templates (`dash-database-app`) instead use `database_spec` for a *provisioned*
+  # Lakebase instance, which is what Quest actually creates (fixed CU_1). If your
+  # publisher tooling prefers `database_spec` for provisioned instances, swap the
+  # key below — the permission value is the same. This is the one field to confirm.
+  - name: "database"
+    description: "The Lakebase (Postgres) database the app reads scored Quest data from for low-latency dashboards."
+    postgres_spec:
+      permission: "CAN_CONNECT_AND_CREATE"
+
+# No user_api_scopes: Quest runs as the app service principal (app auth), not
+# on-behalf-of-user auth. It does not call user-scoped APIs and never handles a
+# user PAT. Add scopes here only if a future feature needs OBO user auth.

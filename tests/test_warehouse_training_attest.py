@@ -37,8 +37,18 @@ for _p in (APP, REPO):
 # In-memory fake of the warehouse (Delta) store. Models only the tables +      #
 # statement shapes the attest path uses, with real insert-if-absent semantics. #
 # --------------------------------------------------------------------------- #
+class TableNotFound(RuntimeError):
+    """Mirrors Databricks TABLE_OR_VIEW_NOT_FOUND (SQLSTATE 42P01)."""
+
+
 class FakeWarehouse:
-    def __init__(self):
+    # training_completions is pre-created at deploy time (deploy.py uc_schema_statements),
+    # so a normally-deployed warehouse app finds it present. The app SP is granted only
+    # USE SCHEMA / SELECT / MODIFY and CANNOT create tables, so model a CREATE TABLE from
+    # the app as a permission error — the app must never rely on creating it. Set
+    # training_completions_exists=False to simulate the (misconfigured) missing-table case.
+    def __init__(self, training_completions_exists=True):
+        self._tc_exists = training_completions_exists
         self.training_completions = []   # {user_id, course_id, course_type, ...}
         self.mission_completions = []    # {user_id, mission_id, points_awarded, ...}
         self.user_points_fact = []       # {user_id, mission_id, event_type, points}
@@ -46,13 +56,25 @@ class FakeWarehouse:
         self.leaderboard = []            # {user_id, display_name, total_points}
         self.calls = []                  # every (sql, params)
 
+    def _require_tc(self):
+        if not self._tc_exists:
+            raise TableNotFound(
+                "[TABLE_OR_VIEW_NOT_FOUND] The table or view `training_completions` "
+                "cannot be found. SQLSTATE: 42P01"
+            )
+
     def query(self, sql, params=()):
         self.calls.append((sql, params))
         s = " ".join(sql.split())
         low = s.lower()
+        if low.startswith("create table"):
+            # The app SP lacks CREATE TABLE by design; if the app ever tries to create
+            # a table at runtime, that's a permission failure in production.
+            raise RuntimeError("PERMISSION_DENIED: principal lacks CREATE TABLE on schema")
         if low.startswith("select"):
             return self._select(low, params)
         if low.startswith("merge into training_completions"):
+            self._require_tc()
             return self._merge_tc(params)
         if low.startswith("merge into mission_completions"):
             return self._merge_mc(params)
@@ -91,6 +113,7 @@ class FakeWarehouse:
                 r["user_id"] == user and r["mission_id"] == mission_id
                 for r in self.mission_completions) else []
         if "from training_completions" in low:
+            self._require_tc()
             user, course_id = params[0], params[1]
             return [{"ok": 1}] if any(
                 r["user_id"] == user and r["course_id"] == course_id
@@ -242,6 +265,19 @@ def test_no_warehouse_read_only_message(client, wh):
     res = _attest(client, "gs_generative_ai")
     assert res.status_code != 409
     assert "requires the Lakebase data backend" not in res.text
+
+
+def test_attest_never_issues_create_table(client, wh):
+    """Regression (found in a real warehouse deploy): the app SP is granted only
+    USE SCHEMA / SELECT / MODIFY, NOT CREATE TABLE. training_completions is pre-created
+    at deploy time (deploy.py), so the attest path must never issue a CREATE TABLE — if
+    it did, it would 503 in production. The fake raises PERMISSION_DENIED on any CREATE,
+    so a green run here proves the app never attempts one."""
+    res = _attest(client, "gs_data_engineering")
+    assert res.status_code == 200, res.text
+    assert res.json()["points_added"] == 250
+    assert not any(" ".join(sql.split()).lower().startswith("create table")
+                   for sql, _ in wh.calls), "app must not CREATE TABLE (SP lacks the grant)"
 
 
 def test_warehouse_write_failure_returns_graceful_503(client, wh, monkeypatch):

@@ -829,6 +829,11 @@ def _attest_training_warehouse(
     def q(sql: str, params: tuple = ()):
         return wh.query(sql, params)
 
+    # training_completions is pre-created at deploy time (deploy.py uc_schema_statements),
+    # like app_settings, so the app SP needs only USE SCHEMA / SELECT / MODIFY and never
+    # CREATE TABLE. The scoring job also creates it if absent. The app does NOT create it
+    # here: the SP lacks CREATE TABLE by design (least privilege).
+
     # Was this course already completed (durable feed row present)? Gates the
     # instant award so a re-tick can't double-credit even if the serving row was
     # transiently cleared. The feed row is never truncated, so it's the durable signal.

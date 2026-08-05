@@ -248,16 +248,27 @@ def render_app_yaml(
 
 # ── SQL / DDL builders (pure) ─────────────────────────────────────────────────
 def uc_schema_statements(catalog: str, schema: str) -> List[str]:
-    """Schema plus the Delta ``app_settings`` table, assuming the catalog exists.
+    """Schema plus the Delta tables the app writes at runtime, assuming the catalog
+    exists.
 
-    ``app_settings`` is pre-created as the deploying user so the app service
-    principal never needs CREATE TABLE for the runtime backend toggle.
+    These are pre-created as the deploying user so the app service principal never
+    needs CREATE TABLE (it is granted only USE SCHEMA, SELECT, MODIFY):
+      - ``app_settings``: the runtime data-backend toggle.
+      - ``training_completions``: the Get Started tick-box's durable self-attested
+        feed on the warehouse backend. Without pre-creation, the first tick before
+        the scoring job's first run (which also creates it) would hit
+        TABLE_OR_VIEW_NOT_FOUND. Schema mirrors scoring_pipeline.py Step 2b.
     """
     return [
         f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}",
         (
             f"CREATE TABLE IF NOT EXISTS {catalog}.{schema}.app_settings "
             "(`key` STRING, value STRING, updated_at TIMESTAMP)"
+        ),
+        (
+            f"CREATE TABLE IF NOT EXISTS {catalog}.{schema}.training_completions "
+            "(user_id STRING, course_id STRING, course_name STRING, "
+            "course_type STRING, completed_at TIMESTAMP)"
         ),
     ]
 

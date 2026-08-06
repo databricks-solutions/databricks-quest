@@ -663,21 +663,15 @@ class AttestPayload(BaseModel):
 @app.post("/api/training/attest")
 async def attest_training(payload: AttestPayload, request: Request):
     """Self-attest completion of a Get Started course. Awards points instantly and
-    records the attestation in the durable feed. Idempotent; Lakebase-only."""
+    records the attestation in the durable feed. Idempotent. Works on either data
+    backend: Lakebase via a psycopg2 transaction, warehouse via idempotent Delta
+    MERGEs (see _attest_training_warehouse)."""
     user = get_user_email(request)
     mission = _TRAINING_MISSIONS.get(payload.course_mission_id)
     if mission is None:
         raise HTTPException(
             status_code=400,
             detail={"error": {"code": "UNKNOWN_MISSION", "message": "Not a Get Started training mission."}},
-        )
-    # Writes require the Lakebase backend; the warehouse backend is read-only.
-    if db.warehouse_backend():
-        raise HTTPException(
-            status_code=409,
-            detail={"error": {"code": "WAREHOUSE_READ_ONLY",
-                              "message": "Self-reporting course completions requires the Lakebase data backend. "
-                                         "Ask an admin to switch the backend in Admin settings."}},
         )
 
     mission_id = mission["id"]
@@ -688,16 +682,31 @@ async def attest_training(payload: AttestPayload, request: Request):
 
     # The Databricks Learner bonus is DERIVED (awarded automatically at >= 2 completed
     # courses), not a course a user can tick. It has no Academy course id, so a direct
-    # attest would write it into training_attestations with course_id='' — which never
-    # matches any course in scoring, so its points would be wiped on the next sync and
-    # never re-derived. Reject direct attest of the bonus (or any training mission
-    # missing a course id) so it can only ever be earned through the derived path.
+    # attest would write a course-less feed row that never matches any course in
+    # scoring, so its points would be wiped on the next sync and never re-derived.
+    # Reject direct attest of the bonus (or any training mission missing a course id)
+    # so it can only ever be earned through the derived path. Backend-independent.
     if mission_id == "databricks_learner" or not course_id:
         raise HTTPException(
             status_code=400,
             detail={"error": {"code": "NOT_ATTESTABLE",
                               "message": "This reward is earned automatically, not self-reported."}},
         )
+
+    # The tick-box works on either data backend, identically. Lakebase writes through
+    # a psycopg2 transaction (below). The warehouse backend can't open a multi-statement
+    # transaction, so it writes the same logical rows as idempotent Delta MERGEs ordered
+    # durable-first — see _attest_training_warehouse for the durability argument. Failures
+    # surface as the same graceful ATTEST_FAILED (503) the Lakebase path returns, not a 500.
+    if db.warehouse_backend():
+        try:
+            return _attest_training_warehouse(user, mission_id, mission_name, points, course_id, display_name)
+        except Exception as e:
+            logger.warning("attest_training (warehouse) failed for %s / %s: %s", user, mission_id, e)
+            raise HTTPException(
+                status_code=503,
+                detail={"error": {"code": "ATTEST_FAILED", "message": "Could not record completion. Try again."}},
+            )
 
     try:
         already = execute_query(
@@ -770,6 +779,203 @@ async def attest_training(payload: AttestPayload, request: Request):
         raise HTTPException(
             status_code=503,
             detail={"error": {"code": "ATTEST_FAILED", "message": "Could not record completion. Try again."}},
+        )
+
+
+# Get Started missions whose category is "Getting Started", excluding the derived
+# Learner bonus — the set the bonus counts distinct completions over. Sourced from
+# the same MISSION_DEFINITIONS so it can't drift from the catalog.
+_GET_STARTED_COURSE_IDS = [
+    m["id"] for m in MISSION_DEFINITIONS
+    if m.get("detection") == "training" and m["id"] != "databricks_learner"
+]
+_LEARNER_THRESHOLD = 2  # distinct Get Started courses that earn the Databricks Learner bonus
+
+
+def _attest_training_warehouse(
+    user: str, mission_id: str, mission_name: str, points: int, course_id: str, display_name: str,
+) -> dict:
+    """Warehouse-backend twin of the Lakebase attest transaction.
+
+    Writes the SAME logical rows as the Lakebase path, but as idempotent Delta
+    ``MERGE`` statements through the SQL warehouse (there is no multi-statement
+    transaction on this backend). Durability + no-double-count come from ordering
+    and idempotency, not atomicity:
+
+      1. Durable feed row → ``training_completions`` as a ``self_attested`` row.
+         This is the source of truth: the 4-hourly scoring run (Step 2b) re-derives
+         the mission award from it with ``WHEN NOT MATCHED`` every cycle, and never
+         truncates it or the append-only Get Started ``mission_completions`` rows.
+         Written FIRST so that if any later step fails, the tick is not lost — the
+         next scoring run reconciles it.
+      2. Instant serving award → ``mission_completions`` + ``user_points_fact`` so
+         points show immediately, each an insert-if-not-matched MERGE (no double
+         count on retry). Only for a genuinely new completion.
+      3. Databricks Learner bonus at >= 2 distinct completed Get Started courses.
+      4. Instant profile/leaderboard bump; scoring recomputes exact totals/ranks
+         globally next cycle (same as the Lakebase path).
+
+    Every statement is idempotent, so a retry after a partial failure converges to
+    the same state a full scoring rebuild would produce.
+    """
+    import warehouse_backend as wh
+
+    # warehouse_backend.query sets the session catalog/schema, so bare table names
+    # (mission_completions, training_completions, ...) resolve to the Quest schema.
+    # Timestamps use SQL-side current_timestamp()/current_date() rather than passing a
+    # Python datetime param: the Statements-API param path stringifies datetimes and
+    # types them as STRING (warehouse_backend._param), so we follow the same pattern
+    # the existing warehouse write (db.py app_settings MERGE) already uses.
+    def q(sql: str, params: tuple = ()):
+        return wh.query(sql, params)
+
+    # training_completions is pre-created at deploy time (deploy.py uc_schema_statements),
+    # like app_settings, so the app SP needs only USE SCHEMA / SELECT / MODIFY and never
+    # CREATE TABLE. The scoring job also creates it if absent. The app does NOT create it
+    # here: the SP lacks CREATE TABLE by design (least privilege).
+
+    # Was this course already completed (durable feed row present)? Gates the
+    # instant award so a re-tick can't double-credit even if the serving row was
+    # transiently cleared. The feed row is never truncated, so it's the durable signal.
+    pre_rows = q(
+        "SELECT 1 AS ok FROM training_completions "
+        "WHERE user_id = %s AND course_id = %s AND course_type = 'self_attested'",
+        (user, course_id),
+    )
+    already_attested = bool(pre_rows)
+
+    # 1) durable self_attested feed row (idempotent on user+course).
+    q(
+        "MERGE INTO training_completions AS t "
+        "USING (SELECT %s AS user_id, %s AS course_id, %s AS course_name, "
+        "'self_attested' AS course_type, current_timestamp() AS completed_at) AS s "
+        "ON t.user_id = s.user_id AND t.course_id = s.course_id AND t.course_type = s.course_type "
+        "WHEN NOT MATCHED THEN INSERT (user_id, course_id, course_name, course_type, completed_at) "
+        "VALUES (s.user_id, s.course_id, s.course_name, s.course_type, s.completed_at)",
+        (user, course_id, mission_name),
+    )
+
+    newly_awarded: list = []  # (mission_id, mission_name, points)
+
+    # Is the mission already completed in the serving table (one-time)?
+    already_done = bool(q(
+        "SELECT 1 AS ok FROM mission_completions WHERE user_id = %s AND mission_id = %s",
+        (user, mission_id),
+    ))
+
+    if not already_attested and not already_done:
+        # 2) instant serving award — mission_completions + user_points_fact.
+        _award_mission_wh(q, user, mission_id, mission_name, points)
+        newly_awarded.append((mission_id, mission_name, points))
+
+        # 3) Databricks Learner bonus at >= 2 DISTINCT completed Get Started courses.
+        learner = _TRAINING_MISSIONS.get("databricks_learner")
+        if learner:
+            in_list = ", ".join("'" + c.replace("'", "''") + "'" for c in _GET_STARTED_COURSE_IDS)
+            distinct_done = int(q(
+                f"SELECT COUNT(DISTINCT mission_id) AS c FROM mission_completions "
+                f"WHERE user_id = %s AND mission_id IN ({in_list})",
+                (user,),
+            )[0]["c"])
+            has_learner = bool(q(
+                "SELECT 1 AS ok FROM mission_completions "
+                "WHERE user_id = %s AND mission_id = 'databricks_learner'",
+                (user,),
+            ))
+            if distinct_done >= _LEARNER_THRESHOLD and not has_learner:
+                lpts = int(learner["points"])
+                _award_mission_wh(q, user, "databricks_learner", learner["name"], lpts)
+                newly_awarded.append(("databricks_learner", learner["name"], lpts))
+
+    # 4) roll awarded points into profile + leaderboard so they show instantly.
+    total_new = sum(p for _, _, p in newly_awarded)
+    if total_new:
+        _bump_user_totals_wh(q, user, display_name, total_new, len(newly_awarded))
+
+    new_total = _current_total_points(user)
+    return {
+        "ok": True,
+        "mission_id": mission_id,
+        "status": "completed",
+        "awarded": [{"mission_id": m, "name": n, "points": p} for m, n, p in newly_awarded],
+        "points_added": total_new,
+        "total_points": new_total,
+    }
+
+
+def _award_mission_wh(q, user: str, mission_id: str, mission_name: str, points: int) -> None:
+    """Insert a one-time completion + its points-fact row on the warehouse backend.
+
+    Each write is an insert-if-not-matched MERGE on the mission's natural key, so a
+    retry (or a caller that already checked) never writes a duplicate completion or
+    double-credits the points — the warehouse twin of ``_award_mission_tx``'s
+    ``WHERE NOT EXISTS`` guards. Timestamps are set SQL-side (current_timestamp /
+    current_date) so no Python datetime crosses the Statements-API param boundary.
+    """
+    q(
+        "MERGE INTO mission_completions AS t "
+        "USING (SELECT %s AS user_id, %s AS mission_id, %s AS mission_name, %s AS points_awarded, "
+        "current_timestamp() AS completed_at, current_date() AS period_start, "
+        "current_date() AS period_end, current_timestamp() AS scored_at) AS s "
+        "ON t.user_id = s.user_id AND t.mission_id = s.mission_id "
+        "WHEN NOT MATCHED THEN INSERT (user_id, mission_id, mission_name, points_awarded, "
+        "completed_at, period_start, period_end, scored_at) "
+        "VALUES (s.user_id, s.mission_id, s.mission_name, s.points_awarded, s.completed_at, "
+        "s.period_start, s.period_end, s.scored_at)",
+        (user, mission_id, mission_name, points),
+    )
+    q(
+        "MERGE INTO user_points_fact AS t "
+        "USING (SELECT %s AS user_id, 'mission_completion' AS event_type, %s AS mission_id, "
+        "%s AS points, %s AS reason, current_timestamp() AS event_timestamp, "
+        "current_timestamp() AS scored_at) AS s "
+        "ON t.user_id = s.user_id AND t.mission_id = s.mission_id AND t.event_type = s.event_type "
+        "WHEN NOT MATCHED THEN INSERT (user_id, event_type, mission_id, points, reason, "
+        "event_timestamp, scored_at) "
+        "VALUES (s.user_id, s.event_type, s.mission_id, s.points, s.reason, s.event_timestamp, s.scored_at)",
+        (user, mission_id, points, f"Completed mission: {mission_name}"),
+    )
+
+
+def _bump_user_totals_wh(q, user: str, display_name: str, added_points: int, added_missions: int) -> None:
+    """Increment the user's total on profile + leaderboard (warehouse backend) so
+    points show instantly. Ranks stay approximate until the next scoring run
+    recomputes them globally — same contract as ``_bump_user_totals_tx``. The bump is
+    transient: scoring recomputes totals from SUM(mission_completions) each cycle."""
+    prof = q("SELECT total_points FROM user_profile_snapshot WHERE user_id = %s", (user,))
+    if prof:
+        new_total = int(prof[0]["total_points"] or 0) + added_points
+        q(
+            "UPDATE user_profile_snapshot SET total_points = %s, level = %s, "
+            "missions_completed = COALESCE(missions_completed, 0) + %s, updated_at = current_timestamp() "
+            "WHERE user_id = %s",
+            (new_total, get_level(new_total), added_missions, user),
+        )
+    else:
+        new_total = added_points
+        q(
+            "INSERT INTO user_profile_snapshot "
+            "(user_id, display_name, total_points, level, current_streak, max_streak, badge_count, "
+            "missions_completed, distinct_products_used, updated_at) "
+            "VALUES (%s, %s, %s, %s, 0, 0, 0, %s, 0, current_timestamp())",
+            (user, display_name, new_total, get_level(new_total), added_missions),
+        )
+
+    lb = q("SELECT total_points FROM leaderboard WHERE user_id = %s", (user,))
+    if lb:
+        lt = int(lb[0]["total_points"] or 0) + added_points
+        q(
+            "UPDATE leaderboard SET total_points = %s, weekly_points = COALESCE(weekly_points, 0) + %s, "
+            "monthly_points = COALESCE(monthly_points, 0) + %s, level = %s, updated_at = current_timestamp() "
+            "WHERE user_id = %s",
+            (lt, added_points, added_points, get_level(lt), user),
+        )
+    else:
+        q(
+            "INSERT INTO leaderboard "
+            "(user_id, display_name, total_points, weekly_points, monthly_points, level, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, current_timestamp())",
+            (user, display_name, added_points, added_points, added_points, get_level(added_points)),
         )
 
 

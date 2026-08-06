@@ -89,6 +89,11 @@ def test_uc_schema_statements():
     joined = " ".join(stmts).lower()
     assert "create schema if not exists quest_data.quest" in joined
     assert "app_settings" in joined
+    # training_completions must be pre-created here too, so the warehouse-backend
+    # tick-box (which MERGEs into it) works before the scoring job's first run and
+    # the app SP never needs CREATE TABLE. Regression: a real warehouse deploy hit
+    # TABLE_OR_VIEW_NOT_FOUND on the first tick when this was missing.
+    assert "training_completions" in joined
     # The catalog is only created on demand, never as part of the schema step.
     assert "create catalog" not in joined
 

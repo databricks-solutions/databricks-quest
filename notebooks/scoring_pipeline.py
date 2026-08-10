@@ -2314,121 +2314,91 @@ print("Leaderboard updated.")
 
 # COMMAND ----------
 
-# Badge: Platform Explorer - 4+ distinct billing_origin_product values
-spark.sql(f"""
-MERGE INTO {tbl('badges')} AS target
-USING (
-  SELECT
-    user_id,
-    'platform_explorer' AS badge_id,
-    'Platform Explorer' AS badge_name,
-    'compass' AS badge_icon,
-    CAST('{NOW}' AS TIMESTAMP) AS earned_at
-  FROM user_products
-  WHERE distinct_products >= 4
-) AS source
-ON target.user_id = source.user_id AND target.badge_id = source.badge_id
-WHEN NOT MATCHED THEN INSERT *
-""")
+# Badge awards. Every badge maps to a signal already computed above:
+#   - mission-based badges read mission_completions (missions scored in earlier steps)
+#   - Platform Explorer reads the user_products view (product breadth)
+#   - Databricks Legend reads point totals OR the count of other badges earned
+# All rules are reachable — no decorative/unearnable badges. Kept in lock-step with
+# app/main.py BADGE_DEFINITIONS and frontend/src/lib/badges.ts (badge_id must match).
 
-# Badge: Consistent Contributor - 14-day streak
-spark.sql(f"""
-MERGE INTO {tbl('badges')} AS target
-USING (
-  SELECT
-    user_id,
-    'consistent_contributor' AS badge_id,
-    'Consistent Contributor' AS badge_name,
-    'flame' AS badge_icon,
-    CAST('{NOW}' AS TIMESTAMP) AS earned_at
-  FROM (
-    SELECT user_id, MAX(max_streak) AS best_streak
-    FROM user_streaks
-    GROUP BY user_id
-  )
-  WHERE best_streak >= 14
-) AS source
-ON target.user_id = source.user_id AND target.badge_id = source.badge_id
-WHEN NOT MATCHED THEN INSERT *
-""")
 
-# Badge: Pipeline Craftsman - completed 5+ pipeline-related missions
-spark.sql(f"""
-MERGE INTO {tbl('badges')} AS target
-USING (
-  SELECT
-    user_id,
-    'pipeline_craftsman' AS badge_id,
-    'Pipeline Craftsman' AS badge_name,
-    'wrench' AS badge_icon,
-    CAST('{NOW}' AS TIMESTAMP) AS earned_at
-  FROM {tbl('mission_completions')}
-  WHERE mission_id IN ('pipeline_builder', 'pipeline_runner', 'auto_loader_pioneer', 'consistent_operator', 'scheduler', 'job_creator')
-  GROUP BY user_id
-  HAVING COUNT(DISTINCT mission_id) >= 5
-) AS source
-ON target.user_id = source.user_id AND target.badge_id = source.badge_id
-WHEN NOT MATCHED THEN INSERT *
-""")
+def _award_badge(badge_id, badge_name, badge_icon, users_subquery):
+    """Idempotently award a badge to every user_id returned by users_subquery.
+    Re-running never re-awards (MERGE ... WHEN NOT MATCHED)."""
+    spark.sql(f"""
+    MERGE INTO {tbl('badges')} AS target
+    USING (
+      SELECT DISTINCT
+        q.user_id,
+        '{badge_id}' AS badge_id,
+        '{badge_name}' AS badge_name,
+        '{badge_icon}' AS badge_icon,
+        CAST('{NOW}' AS TIMESTAMP) AS earned_at
+      FROM ({users_subquery}) q
+      WHERE q.user_id IS NOT NULL AND q.user_id != ''
+    ) AS source
+    ON target.user_id = source.user_id AND target.badge_id = source.badge_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print(f"Badge awarded: {badge_name}")
 
-# Badge: AI Pioneer - completed 3+ of the AI/ML missions
-# (matches BADGE_DEFINITIONS.ai_pioneer in app/main.py: required_missions=3,
-# mission_filter = model_deployer / ai_function_builder / vector_search_pioneer /
-# mlflow_experimenter). Previously defined in the UI but never awarded.
-spark.sql(f"""
-MERGE INTO {tbl('badges')} AS target
-USING (
-  SELECT
-    user_id,
-    'ai_pioneer' AS badge_id,
-    'AI Pioneer' AS badge_name,
-    'brain' AS badge_icon,
-    CAST('{NOW}' AS TIMESTAMP) AS earned_at
-  FROM {tbl('mission_completions')}
-  WHERE mission_id IN ('model_deployer', 'ai_function_builder', 'vector_search_pioneer', 'mlflow_experimenter')
-  GROUP BY user_id
-  HAVING COUNT(DISTINCT mission_id) >= 3
-) AS source
-ON target.user_id = source.user_id AND target.badge_id = source.badge_id
-WHEN NOT MATCHED THEN INSERT *
-""")
 
-# Badge: Full Stack - completed missions spanning 5+ distinct categories
-# (matches BADGE_DEFINITIONS.full_stack: required_categories=5). Category is
-# derived from mission_id here since mission_completions has no category column;
-# the mapping mirrors MISSION_DEFINITIONS in app/main.py. Previously defined in
-# the UI but never awarded.
-spark.sql(f"""
-MERGE INTO {tbl('badges')} AS target
-USING (
-  SELECT
-    user_id,
-    'full_stack' AS badge_id,
-    'Full Stack' AS badge_name,
-    'layers' AS badge_icon,
-    CAST('{NOW}' AS TIMESTAMP) AS earned_at
-  FROM (
-    SELECT
-      user_id,
-      CASE
-        WHEN mission_id IN ('first_steps', {", ".join(f"'{m}'" for m in GET_STARTED_MISSION_IDS)}) THEN 'Getting Started'
-        WHEN mission_id IN ('job_creator','pipeline_builder','pipeline_runner','scheduler','auto_loader_pioneer','multi_task_orchestrator','liquid_clustering') THEN 'Data Engineering'
-        WHEN mission_id IN ('genie_creator','genie_explorer','genie_curator','genie_power_user','dashboard_designer','dashboard_viewer','dashboard_publisher','dashboard_operator','data_explorer','power_analyst','query_author','alert_creator','app_builder','notebook_author','sql_analyst') THEN 'Analytics'
-        WHEN mission_id IN ('genie_code_user','model_deployer','ai_function_builder','vector_search_pioneer','mlflow_experimenter','ml_practitioner') THEN 'AI / ML'
-        WHEN mission_id IN ('lakebase_builder','lakebase_sync','lakebase_database','lakebase_connector') THEN 'Lakebase'
-        WHEN mission_id = 'stream_starter' THEN 'Streaming'
-        WHEN mission_id IN ('consistent_operator','daily_driver','cross_product_champion') THEN 'Engagement'
-        WHEN mission_id = 'uc_publisher' THEN 'Governance'
-        ELSE 'Other'
-      END AS category
-    FROM {tbl('mission_completions')}
-  )
-  GROUP BY user_id
-  HAVING COUNT(DISTINCT category) >= 5
-) AS source
-ON target.user_id = source.user_id AND target.badge_id = source.badge_id
-WHEN NOT MATCHED THEN INSERT *
-""")
+def _mission_rule(mission_ids, need):
+    """Subquery of users who completed at least `need` of the given mission ids.
+    All-of => need == len(mission_ids); any-of => need == 1; count-n => need == n."""
+    in_list = ", ".join(f"'{m}'" for m in mission_ids)
+    return f"""
+      SELECT user_id
+      FROM {tbl('mission_completions')}
+      WHERE mission_id IN ({in_list})
+      GROUP BY user_id
+      HAVING COUNT(DISTINCT mission_id) >= {need}
+    """
+
+
+# --- Platform Explorer: 4+ distinct products (billing signal) ---
+_award_badge(
+    "platform_explorer", "Platform Explorer", "compass",
+    "SELECT user_id FROM user_products WHERE distinct_products >= 4",
+)
+
+# --- Mission-based badges (id, name, icon, mission ids, need) ---
+MISSION_BADGES = [
+    ("pipeline_pioneer", "Pipeline Pioneer", "git-branch",
+     ["pipeline_builder", "pipeline_runner", "auto_loader_pioneer", "scheduler", "multi_task_orchestrator", "job_creator", "liquid_clustering"], 4),
+    ("lakeflow_builder", "Lakeflow Builder", "git-branch",
+     ["pipeline_builder", "pipeline_runner"], 2),
+    ("workflow_runner", "Workflow Runner", "clock",
+     ["job_creator", "scheduler"], 2),
+    ("query_master", "Query Master", "search",
+     ["data_explorer", "power_analyst"], 1),
+    ("dashboard_creator", "Dashboard Creator", "layout-dashboard",
+     ["dashboard_designer"], 1),
+    ("ml_practitioner_badge", "ML Practitioner", "brain",
+     ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter"], 2),
+    ("unity_catalog_champion", "Unity Catalog Champion", "layers",
+     ["uc_publisher"], 1),
+    ("governance_guardian", "Governance Guardian", "shield",
+     ["consistent_operator"], 1),
+]
+for b_id, b_name, b_icon, b_missions, b_need in MISSION_BADGES:
+    _award_badge(b_id, b_name, b_icon, _mission_rule(b_missions, b_need))
+
+# --- Databricks Legend: Elite (5,000 pts) OR every other badge earned ---
+# Awarded last so the "all other badges" path can count the badges granted above.
+# NON_LEGEND_BADGE_COUNT = 9 (Platform Explorer + the 8 mission badges).
+NON_LEGEND_BADGE_COUNT = 1 + len(MISSION_BADGES)
+_award_badge(
+    "databricks_legend", "Databricks Legend", "crown",
+    f"""
+      SELECT user_id FROM {tbl('user_profile_snapshot')} WHERE total_points >= 5000
+      UNION
+      SELECT user_id FROM {tbl('badges')}
+      WHERE badge_id != 'databricks_legend'
+      GROUP BY user_id
+      HAVING COUNT(DISTINCT badge_id) >= {NON_LEGEND_BADGE_COUNT}
+    """,
+)
 
 print("Badges awarded.")
 

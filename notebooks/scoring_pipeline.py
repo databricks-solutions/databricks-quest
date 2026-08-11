@@ -2356,6 +2356,23 @@ def _mission_rule(mission_ids, need):
     """
 
 
+# --- Retire badge ids the current catalog no longer defines ---
+# _award_badge only ever inserts (MERGE ... WHEN NOT MATCHED), so a badge dropped
+# from the catalog lingers in the table forever. Besides inflating badge_count,
+# it feeds the Databricks Legend rule below, which needs 9 DISTINCT non-legend
+# badges: a retired badge silently substitutes for one the user never earned.
+# Swept BEFORE any award so the Legend count only ever sees current badges.
+# Mirrors the RETIRED_MISSIONS sweep earlier in this notebook.
+RETIRED_BADGES = ("ai_pioneer", "consistent_contributor", "full_stack", "pipeline_craftsman")
+_rb_in = ", ".join(f"'{b}'" for b in RETIRED_BADGES)
+_rb_n = spark.sql(
+    f"SELECT COUNT(*) AS c FROM {tbl('badges')} WHERE badge_id IN ({_rb_in})"
+).first()["c"]
+if _rb_n:
+    spark.sql(f"DELETE FROM {tbl('badges')} WHERE badge_id IN ({_rb_in})")
+    print(f"  badges: removed {_rb_n} rows for retired badges ({', '.join(RETIRED_BADGES)})")
+print("Retired-badge sweep complete.")
+
 # --- Platform Explorer: 4+ distinct products (billing signal) ---
 _award_badge(
     "platform_explorer", "Platform Explorer", "compass",
@@ -2388,16 +2405,39 @@ for b_id, b_name, b_icon, b_missions, b_need in MISSION_BADGES:
 # Awarded last so the "all other badges" path can count the badges granted above.
 # NON_LEGEND_BADGE_COUNT = 9 (Platform Explorer + the 8 mission badges).
 NON_LEGEND_BADGE_COUNT = 1 + len(MISSION_BADGES)
+
+# Legend is the only badge whose rule depends on OTHER badges, so a catalog
+# change can invalidate one already granted (a retired badge that used to make up
+# the 9). Define "qualified" once and use it for BOTH the revoke and the award,
+# so the two can never disagree.
+spark.sql(f"""
+CREATE OR REPLACE TEMP VIEW legend_qualified AS
+SELECT user_id FROM {tbl('user_profile_snapshot')} WHERE total_points >= 5000
+UNION
+SELECT user_id FROM {tbl('badges')}
+WHERE badge_id != 'databricks_legend'
+GROUP BY user_id
+HAVING COUNT(DISTINCT badge_id) >= {NON_LEGEND_BADGE_COUNT}
+""")
+
+# Revoke before awarding: without this a Legend granted under an older catalog
+# outlives the criteria that earned it, because MERGE never deletes.
+_lg_revoke = spark.sql(f"""
+  SELECT COUNT(*) AS c FROM {tbl('badges')}
+  WHERE badge_id = 'databricks_legend'
+    AND user_id NOT IN (SELECT user_id FROM legend_qualified)
+""").first()["c"]
+if _lg_revoke:
+    spark.sql(f"""
+      DELETE FROM {tbl('badges')}
+      WHERE badge_id = 'databricks_legend'
+        AND user_id NOT IN (SELECT user_id FROM legend_qualified)
+    """)
+    print(f"  badges: revoked {_lg_revoke} Databricks Legend rows that no longer qualify")
+
 _award_badge(
     "databricks_legend", "Databricks Legend", "crown",
-    f"""
-      SELECT user_id FROM {tbl('user_profile_snapshot')} WHERE total_points >= 5000
-      UNION
-      SELECT user_id FROM {tbl('badges')}
-      WHERE badge_id != 'databricks_legend'
-      GROUP BY user_id
-      HAVING COUNT(DISTINCT badge_id) >= {NON_LEGEND_BADGE_COUNT}
-    """,
+    "SELECT user_id FROM legend_qualified",
 )
 
 print("Badges awarded.")
@@ -2456,6 +2496,18 @@ ON target.user_id = source.user_id
   AND target.mission_id = source.mission_id
   AND target.notification_type = source.notification_type
 WHEN NOT MATCHED THEN INSERT *
+""")
+
+# Drop "Badge Unlocked" notifications for badges the user no longer holds --
+# retired from the catalog, or revoked because the criteria no longer hold.
+# Otherwise the bell keeps advertising a badge that is not in their vault.
+spark.sql(f"""
+DELETE FROM {tbl('notifications')} AS n
+WHERE n.notification_type = 'badge_earned'
+  AND NOT EXISTS (
+    SELECT 1 FROM {tbl('badges')} b
+    WHERE b.user_id = n.user_id AND b.badge_id = n.mission_id
+  )
 """)
 
 print("Notifications generated.")

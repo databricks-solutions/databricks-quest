@@ -807,9 +807,11 @@ async def attest_training(payload: AttestPayload, request: Request):
         )
 
 
-# Get Started missions whose category is "Getting Started", excluding the derived
-# Learner bonus — the set the bonus counts distinct completions over. Sourced from
-# the same MISSION_DEFINITIONS so it can't drift from the catalog.
+# The attestable Get Started courses: every training-detected mission except the
+# derived Learner bonus. This is the set the bonus counts distinct completions
+# over. Filtered on detection == "training" rather than the display category,
+# which also contains non-course missions like first_steps. Sourced from
+# MISSION_DEFINITIONS so it can't drift from the catalog.
 _GET_STARTED_COURSE_IDS = [
     m["id"] for m in MISSION_DEFINITIONS
     if m.get("detection") == "training" and m["id"] != "databricks_learner"
@@ -935,7 +937,9 @@ def _award_mission_wh(q, user: str, mission_id: str, mission_name: str, points: 
     retry (or a caller that already checked) never writes a duplicate completion or
     double-credits the points — the warehouse twin of ``_award_mission_tx``'s
     ``WHERE NOT EXISTS`` guards. Timestamps are set SQL-side (current_timestamp /
-    current_date) so no Python datetime crosses the Statements-API param boundary.
+    current_date) so no Python datetime crosses the Statements-API param boundary,
+    and the fact row reuses the completion's own ``completed_at`` so a later
+    scoring run recognises it instead of writing a duplicate.
     """
     q(
         "MERGE INTO mission_completions AS t "
@@ -949,16 +953,24 @@ def _award_mission_wh(q, user: str, mission_id: str, mission_name: str, points: 
         "s.period_start, s.period_end, s.scored_at)",
         (user, mission_id, mission_name, points),
     )
+    # Source the fact row FROM the completion just written, rather than calling
+    # current_timestamp() again. Scoring's Step 3 mirrors mission_completions into
+    # user_points_fact keyed on (user_id, mission_id, event_timestamp); if this row
+    # carried its own timestamp it would differ from completed_at by the
+    # milliseconds between the two statements, and the next scoring run would
+    # insert a SECOND fact row for the same award. Deriving points/reason here too
+    # keeps this row byte-identical to the one scoring would write.
     q(
         "MERGE INTO user_points_fact AS t "
-        "USING (SELECT %s AS user_id, 'mission_completion' AS event_type, %s AS mission_id, "
-        "%s AS points, %s AS reason, current_timestamp() AS event_timestamp, "
-        "current_timestamp() AS scored_at) AS s "
+        "USING (SELECT user_id, 'mission_completion' AS event_type, mission_id, "
+        "points_awarded AS points, CONCAT('Completed mission: ', mission_name) AS reason, "
+        "completed_at AS event_timestamp, current_timestamp() AS scored_at "
+        "FROM mission_completions WHERE user_id = %s AND mission_id = %s) AS s "
         "ON t.user_id = s.user_id AND t.mission_id = s.mission_id AND t.event_type = s.event_type "
         "WHEN NOT MATCHED THEN INSERT (user_id, event_type, mission_id, points, reason, "
         "event_timestamp, scored_at) "
         "VALUES (s.user_id, s.event_type, s.mission_id, s.points, s.reason, s.event_timestamp, s.scored_at)",
-        (user, mission_id, points, f"Completed mission: {mission_name}"),
+        (user, mission_id),
     )
 
 

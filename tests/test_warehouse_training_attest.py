@@ -55,6 +55,7 @@ class FakeWarehouse:
         self.user_profile_snapshot = []  # {user_id, display_name, total_points}
         self.leaderboard = []            # {user_id, display_name, total_points}
         self.calls = []                  # every (sql, params)
+        self._tick = 0                   # stands in for SQL-side current_timestamp()
 
     def _require_tc(self):
         if not self._tc_exists:
@@ -79,7 +80,7 @@ class FakeWarehouse:
         if low.startswith("merge into mission_completions"):
             return self._merge_mc(params)
         if low.startswith("merge into user_points_fact"):
-            return self._merge_upf(params)
+            return self._merge_upf(low, params)
         if low.startswith("update user_profile_snapshot"):
             return self._set(self.user_profile_snapshot, params[-1], int(params[0]))
         if low.startswith("insert into user_profile_snapshot"):
@@ -145,18 +146,39 @@ class FakeWarehouse:
         user, mission_id = params[0], params[1]
         if not any(r["user_id"] == user and r["mission_id"] == mission_id
                    for r in self.mission_completions):
+            # completed_at is SQL-side current_timestamp(); model each clock
+            # reading as a distinct tick so a test can tell two of them apart.
+            self._tick += 1
             self.mission_completions.append(
                 {"user_id": user, "mission_id": mission_id, "mission_name": params[2],
-                 "points_awarded": int(params[3])})
+                 "points_awarded": int(params[3]), "completed_at": self._tick})
         return []
 
-    def _merge_upf(self, params):
+    def _merge_upf(self, low, params):
+        """Model whichever statement shape the app actually sent.
+
+        Sourcing the row ``FROM mission_completions`` carries the completion's own
+        completed_at across; stamping a fresh current_timestamp() in the USING
+        clause does not. The difference is the whole point: scoring Step 3 keys on
+        (user_id, mission_id, event_timestamp), so a fact row holding its own clock
+        reading gets duplicated on the next scoring run.
+        """
         user, mission_id = params[0], params[1]
+        sourced_from_completion = "from mission_completions" in low
+        if sourced_from_completion:
+            src = next((r for r in self.mission_completions
+                        if r["user_id"] == user and r["mission_id"] == mission_id), None)
+            if src is None:
+                return []  # empty MERGE source: nothing to mirror
+            points, event_ts = int(src["points_awarded"]), src["completed_at"]
+        else:
+            self._tick += 1
+            points, event_ts = int(params[2]), self._tick
         if not any(r["user_id"] == user and r["mission_id"] == mission_id
                    and r["event_type"] == "mission_completion" for r in self.user_points_fact):
             self.user_points_fact.append(
                 {"user_id": user, "event_type": "mission_completion",
-                 "mission_id": mission_id, "points": int(params[2])})
+                 "mission_id": mission_id, "points": points, "event_timestamp": event_ts})
         return []
 
     @staticmethod
@@ -290,3 +312,45 @@ def test_warehouse_write_failure_returns_graceful_503(client, wh, monkeypatch):
     res = _attest(client, "gs_data_engineering")
     assert res.status_code == 503, res.text
     assert res.json()["error"]["code"] == "ATTEST_FAILED"
+
+
+def test_points_fact_row_carries_the_completion_timestamp(client, wh):
+    """Regression: the fact row must reuse the completion's own ``completed_at``.
+
+    Scoring Step 3 mirrors mission_completions into user_points_fact keyed on
+    (user_id, mission_id, event_timestamp). When the app stamped the fact row with
+    its own current_timestamp() it landed milliseconds after completed_at, so the
+    next scoring run saw no match and inserted a SECOND fact row for the same
+    award — observed live as two rows per ticked mission. Sourcing the row from
+    the completion keeps the two identical, so scoring recognises it.
+    """
+    res = _attest(client, "gs_data_engineering")
+    assert res.status_code == 200, res.text
+
+    completion = next(r for r in wh.mission_completions
+                      if r["mission_id"] == "gs_data_engineering")
+    fact = next(r for r in wh.user_points_fact
+                if r["mission_id"] == "gs_data_engineering")
+    assert fact["event_timestamp"] == completion["completed_at"], (
+        "fact row must carry the completion's timestamp, or scoring duplicates it"
+    )
+    assert fact["points"] == completion["points_awarded"]
+
+
+def test_scoring_rerun_does_not_duplicate_the_fact_row(client, wh):
+    """Replay what scoring Step 3 does and assert it finds a match.
+
+    Step 3 MERGEs mission_completions into user_points_fact on
+    (user_id, mission_id, event_timestamp); a matching row means no duplicate.
+    """
+    assert _attest(client, "gs_data_engineering").status_code == 200
+    before = len(wh.user_points_fact)
+
+    for c in wh.mission_completions:
+        matched = any(f["user_id"] == c["user_id"]
+                      and f["mission_id"] == c["mission_id"]
+                      and f["event_timestamp"] == c["completed_at"]
+                      for f in wh.user_points_fact)
+        assert matched, f"scoring would insert a duplicate fact row for {c['mission_id']}"
+
+    assert len(wh.user_points_fact) == before

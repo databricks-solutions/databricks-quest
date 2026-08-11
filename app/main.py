@@ -223,12 +223,37 @@ MISSION_DEFINITIONS = [
 # Consumption points: 1 point per 10 DBUs consumed, scored weekly
 CONSUMPTION_POINTS_RATIO = 10  # DBUs per point
 
+# Badge catalog. Kept in lock-step with the frontend catalog
+# (frontend/src/lib/badges.ts) and the award MERGE blocks in
+# notebooks/scoring_pipeline.py. `id` MUST equal the badge_id the pipeline writes.
+# Every badge is backed by a signal the pipeline already computes — no decorative
+# or unearnable badges. `criteria` documents the exact award rule:
+#   missions_all   -> complete ALL listed missions
+#   missions_any   -> complete ANY listed mission
+#   missions_count -> complete >= `need` of listed missions
+#   metric         -> reach `need` on a computed signal (product breadth)
+#   legend         -> reach `points` OR earn all other badges
 BADGE_DEFINITIONS = [
-    {"id": "pipeline_craftsman", "name": "Pipeline Craftsman", "description": "Complete 5 pipeline-related missions", "icon": "wrench", "required_missions": 5, "mission_filter": ["pipeline_builder", "pipeline_runner", "auto_loader_pioneer", "consistent_operator", "scheduler"]},
-    {"id": "platform_explorer", "name": "Platform Explorer", "description": "Use 4+ distinct Databricks product areas", "icon": "compass", "required_products": 4},
-    {"id": "consistent_contributor", "name": "Consistent Contributor", "description": "Maintain a 14-day activity streak", "icon": "flame", "required_streak": 14},
-    {"id": "ai_pioneer", "name": "AI Pioneer", "description": "Complete 3 AI/ML missions", "icon": "brain", "required_missions": 3, "mission_filter": ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter"]},
-    {"id": "full_stack", "name": "Full Stack", "description": "Complete missions in 5+ different categories", "icon": "layers", "required_categories": 5},
+    {"id": "platform_explorer", "name": "Platform Explorer", "description": "Use 4+ distinct Databricks products", "icon": "compass",
+     "criteria": {"kind": "metric", "field": "distinct_products_used", "need": 4}},
+    {"id": "pipeline_pioneer", "name": "Pipeline Pioneer", "description": "Complete 4 of the core Data Engineering missions", "icon": "git-branch",
+     "criteria": {"kind": "missions_count", "need": 4, "missions": ["pipeline_builder", "pipeline_runner", "auto_loader_pioneer", "scheduler", "multi_task_orchestrator", "job_creator", "liquid_clustering"]}},
+    {"id": "lakeflow_builder", "name": "Lakeflow Builder", "description": "Build a pipeline and complete a successful run", "icon": "git-branch",
+     "criteria": {"kind": "missions_all", "missions": ["pipeline_builder", "pipeline_runner"]}},
+    {"id": "workflow_runner", "name": "Workflow Runner", "description": "Create a Job and put it on a schedule", "icon": "clock",
+     "criteria": {"kind": "missions_all", "missions": ["job_creator", "scheduler"]}},
+    {"id": "query_master", "name": "Query Master", "description": "Hit a weekly SQL query milestone", "icon": "search",
+     "criteria": {"kind": "missions_any", "missions": ["data_explorer", "power_analyst"]}},
+    {"id": "dashboard_creator", "name": "Dashboard Creator", "description": "Create your first Databricks dashboard", "icon": "layout-dashboard",
+     "criteria": {"kind": "missions_all", "missions": ["dashboard_designer"]}},
+    {"id": "ml_practitioner_badge", "name": "ML Practitioner", "description": "Complete 2 of the core AI/ML missions", "icon": "brain",
+     "criteria": {"kind": "missions_count", "need": 2, "missions": ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter"]}},
+    {"id": "unity_catalog_champion", "name": "Unity Catalog Champion", "description": "Publish a table across schemas with Unity Catalog", "icon": "layers",
+     "criteria": {"kind": "missions_all", "missions": ["uc_publisher"]}},
+    {"id": "governance_guardian", "name": "Governance Guardian", "description": "Operate jobs or pipelines on 7 distinct days", "icon": "shield",
+     "criteria": {"kind": "missions_all", "missions": ["consistent_operator"]}},
+    {"id": "databricks_legend", "name": "Databricks Legend", "description": "Reach Elite level (5,000 points) or collect every other badge", "icon": "crown",
+     "criteria": {"kind": "legend", "points": 5000}},
 ]
 
 LEVEL_THRESHOLDS = [
@@ -782,9 +807,11 @@ async def attest_training(payload: AttestPayload, request: Request):
         )
 
 
-# Get Started missions whose category is "Getting Started", excluding the derived
-# Learner bonus — the set the bonus counts distinct completions over. Sourced from
-# the same MISSION_DEFINITIONS so it can't drift from the catalog.
+# The attestable Get Started courses: every training-detected mission except the
+# derived Learner bonus. This is the set the bonus counts distinct completions
+# over. Filtered on detection == "training" rather than the display category,
+# which also contains non-course missions like first_steps. Sourced from
+# MISSION_DEFINITIONS so it can't drift from the catalog.
 _GET_STARTED_COURSE_IDS = [
     m["id"] for m in MISSION_DEFINITIONS
     if m.get("detection") == "training" and m["id"] != "databricks_learner"
@@ -910,7 +937,9 @@ def _award_mission_wh(q, user: str, mission_id: str, mission_name: str, points: 
     retry (or a caller that already checked) never writes a duplicate completion or
     double-credits the points — the warehouse twin of ``_award_mission_tx``'s
     ``WHERE NOT EXISTS`` guards. Timestamps are set SQL-side (current_timestamp /
-    current_date) so no Python datetime crosses the Statements-API param boundary.
+    current_date) so no Python datetime crosses the Statements-API param boundary,
+    and the fact row reuses the completion's own ``completed_at`` so a later
+    scoring run recognises it instead of writing a duplicate.
     """
     q(
         "MERGE INTO mission_completions AS t "
@@ -924,16 +953,24 @@ def _award_mission_wh(q, user: str, mission_id: str, mission_name: str, points: 
         "s.period_start, s.period_end, s.scored_at)",
         (user, mission_id, mission_name, points),
     )
+    # Source the fact row FROM the completion just written, rather than calling
+    # current_timestamp() again. Scoring's Step 3 mirrors mission_completions into
+    # user_points_fact keyed on (user_id, mission_id, event_timestamp); if this row
+    # carried its own timestamp it would differ from completed_at by the
+    # milliseconds between the two statements, and the next scoring run would
+    # insert a SECOND fact row for the same award. Deriving points/reason here too
+    # keeps this row byte-identical to the one scoring would write.
     q(
         "MERGE INTO user_points_fact AS t "
-        "USING (SELECT %s AS user_id, 'mission_completion' AS event_type, %s AS mission_id, "
-        "%s AS points, %s AS reason, current_timestamp() AS event_timestamp, "
-        "current_timestamp() AS scored_at) AS s "
+        "USING (SELECT user_id, 'mission_completion' AS event_type, mission_id, "
+        "points_awarded AS points, CONCAT('Completed mission: ', mission_name) AS reason, "
+        "completed_at AS event_timestamp, current_timestamp() AS scored_at "
+        "FROM mission_completions WHERE user_id = %s AND mission_id = %s) AS s "
         "ON t.user_id = s.user_id AND t.mission_id = s.mission_id AND t.event_type = s.event_type "
         "WHEN NOT MATCHED THEN INSERT (user_id, event_type, mission_id, points, reason, "
         "event_timestamp, scored_at) "
         "VALUES (s.user_id, s.event_type, s.mission_id, s.points, s.reason, s.event_timestamp, s.scored_at)",
-        (user, mission_id, points, f"Completed mission: {mission_name}"),
+        (user, mission_id),
     )
 
 

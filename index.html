@@ -52,6 +52,7 @@
     .hero p.lead{max-width:720px;margin:22px auto 0;font-size:clamp(17px,2.2vw,21px);color:var(--muted)}
     .hero .cta{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap}
     .hero-shot{margin:56px auto 0;max-width:1050px;border-radius:var(--radius);border:1px solid var(--line);box-shadow:0 40px 120px rgba(0,0,0,.6);overflow:hidden}
+    .hero-shot iframe{width:100%;aspect-ratio:16/9;display:block;border:0;background:#000}
 
     /* generic section */
     section{padding:70px 0}
@@ -155,7 +156,9 @@
     <a class="btn btn-primary" href="https://github.com/databricks-solutions/databricks-quest" target="_blank" rel="noreferrer">View on GitHub →</a>
     <a class="btn" href="#start">Deploy it</a>
   </div>
-  <div class="hero-shot"><img src="images/overview.png" alt="Databricks Quest dashboard" /></div>
+  <div class="hero-shot">
+    <iframe src="https://www.youtube.com/embed/orVYAYDhN3U" title="Databricks Quest video walkthrough" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen loading="lazy"></iframe>
+  </div>
 </section>
 
 <section class="wrap" id="why">

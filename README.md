@@ -4,6 +4,14 @@ A gamification app that turns Databricks platform adoption into a game. Users ea
 
 Built entirely on Databricks: system tables for usage tracking, Delta Lake for scoring, Lakebase for fast reads, and Databricks Apps for hosting. Users log in with their existing workspace credentials.
 
+**▶️ Watch the walkthrough**
+
+<p align="center">
+  <a href="https://youtu.be/orVYAYDhN3U">
+    <img src="https://img.youtube.com/vi/orVYAYDhN3U/maxresdefault.jpg" alt="Databricks Quest video walkthrough" width="640">
+  </a>
+</p>
+
 ---
 
 ## Two modes

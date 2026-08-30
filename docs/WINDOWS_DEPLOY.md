@@ -1,9 +1,8 @@
 # Deploy Quest on Windows (and macOS / Linux) with `deploy.py`
 
-`deploy.sh` is a bash script and does not run on Windows. `deploy.py` is a
-cross-platform Python installer that does the same job using the Databricks SDK
-— no bash, no `psql.exe`, no Terraform. The same command works on Windows,
-macOS, and Linux.
+`deploy.py` is a cross-platform Python installer that runs the whole deploy using
+the Databricks SDK -- no bash, no `psql.exe`, no Terraform. The same command works
+on Windows, macOS, and Linux.
 
 ## Prerequisites
 
@@ -106,7 +105,7 @@ timeouts you added to the job by hand survive.
 
 Pick one deploy tool per app and stay with it. The scoring job is named
 `[Quest] Scoring Pipeline (<app-name>)`, which at the default app name is the
-same name `deploy.sh` gives its bundle-managed job. If `deploy.py` finds a job
+same name the Databricks Asset Bundle (`databricks.yml`) gives its managed job. If `deploy.py` finds a job
 that a Databricks Asset Bundle owns, it leaves it alone and says so rather than
 rewriting it behind the bundle's back; pass a different `--app-name` if you
 want the two to coexist.
@@ -143,9 +142,7 @@ warehouse and the catalog.
 | `--skip-scoring` | Create the schedule but don't run scoring now | run it |
 | `--non-interactive` / `-y` | Never prompt (CI / unattended) | prompt |
 
-`deploy.py` covers Adoption Mode. Event Mode (GameDay quests, teams, host
-console, federation) is still deploy.sh-only — see
-[README_GAMEDAY.md](../README_GAMEDAY.md).
+`deploy.py` deploys Quest's Adoption Mode.
 
 ## What runs where
 

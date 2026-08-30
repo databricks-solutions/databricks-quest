@@ -158,8 +158,7 @@ validator type, positive hint penalty, missing `expect`). Fix all errors and
 review every warning. The CLI prints the **content hash** — the value the import
 path uses for idempotency (see versioning below).
 
-Against a running app (host-gated — see workstream A in
-[`README_GAMEDAY.md`](../README_GAMEDAY.md)):
+Against a running app (host-gated):
 
 ```bash
 curl -sX POST "$APP_URL/api/host/quest-packs/lint" \

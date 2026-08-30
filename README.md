@@ -14,29 +14,7 @@ Built entirely on Databricks: system tables for usage tracking, Delta Lake for s
 
 ---
 
-## Two modes
-
-Databricks Quest runs in two complementary modes from a **single codebase**, selected at deploy time:
-
-| Mode | What it is | When to use | Enable |
-|------|-----------|-------------|--------|
-| **Adoption Mode** (default) | The passive, system-table-driven platform-adoption game described below — 30+ missions, weekly leaderboard, swag. Always on. | Ongoing internal adoption, always-on workspace engagement. | On by default. No flag needed. |
-| **Event Mode (GameDay)** | Configurable, facilitator-run GameDay events: quest packs, teams, deterministic validators, live scoring/leaderboard, host console, per-team resource bootstrap, and post-event reporting. | Hands-on events, SE/SA enablement, customer workshops, competitive team challenges, hunter-account motions. | Opt-in: `./deploy.sh --event-mode` (or `QUEST_EVENT_MODE=on`). Implied by the `master`/`child` federation roles. |
-
-Event Mode is **purely additive** — when it's off, the GameDay APIs return 404, the Event UI is hidden, and the GameDay migrations are skipped, so Adoption Mode behaves exactly as it always has. Event Mode can also span **multiple workspaces** (a master workspace aggregating child lab workspaces) via a shared Lakebase.
-
-**Event Mode docs:**
-
-- **[README_GAMEDAY.md](README_GAMEDAY.md)** — GameDay deployment & operations guide (what works today, per feature).
-- **[docs/STATUS.md](docs/STATUS.md)** — authoritative per-PR status tracker.
-- **[samples/packs/README.md](samples/packs/README.md)** — run & customize the shipped sample quest packs.
-- **[samples/QUEST_PACK_SCHEMA.md](samples/QUEST_PACK_SCHEMA.md)** — quest pack authoring reference.
-- **[samples/SAMPLE_EVENT_RUNBOOK.md](samples/SAMPLE_EVENT_RUNBOOK.md)** — facilitator event runbook.
-- **[docs/17_TROUBLESHOOTING.md](docs/17_TROUBLESHOOTING.md)** — troubleshooting both modes.
-- **[docs/18_RELEASE_CHECKLIST.md](docs/18_RELEASE_CHECKLIST.md)** — pre-release checklist.
-- **[docs/19_MANUAL_E2E_TEST.md](docs/19_MANUAL_E2E_TEST.md)** — manual end-to-end test script + load-test guidance.
-
-The rest of this README describes **Adoption Mode**.
+> **Deploy it into your own workspace** with `python deploy.py` -- see **[SETUP.md](SETUP.md)** for the full guide, or **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)** to have **Genie Code** do it for you.
 
 ---
 
@@ -53,48 +31,42 @@ No separate accounts needed. Users log in with their workspace credentials.
 
 ## Deploy
 
-Full instructions: **[SETUP.md](SETUP.md)** -- covers four deployment methods:
-
-| Method | Best For | Time |
-|--------|----------|------|
-| **Scripted** (`./deploy.sh`) | Most users on macOS/Linux | ~15 min |
-| **Python** (`python deploy.py`) | Windows / anywhere without bash or psql | ~5 min |
-| **Manual** (step-by-step) | Full control, restricted environments | ~30 min |
-| **Quick** (`./deploy.sh --quick`) | Fast testing without DAB | ~10 min |
-
-On Windows or any OS without bash, `python deploy.py --data-backend warehouse` runs the whole deploy through the Databricks SDK: no bash, no `psql`, no Terraform. It asks which Unity Catalog to use, or takes `--catalog <name>`. It covers Adoption Mode; Event Mode still needs `deploy.sh`. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
+Quest deploys with **`deploy.py`**, a cross-platform Python installer that drives the Databricks SDK -- no bash, no `psql`, no Terraform, so the same command works on Windows, macOS, and Linux. Full instructions are in **[SETUP.md](SETUP.md)**; deploying through **Genie Code** is covered in **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)**.
 
 Quick start:
 
 ```bash
-git clone https://github.com/deepbasu123/databricks-quest.git
+git clone https://github.com/databricks-solutions/databricks-quest.git
 cd databricks-quest
-./deploy.sh
+pip install -r requirements.txt
+databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
+python deploy.py --catalog YOUR_CATALOG --data-backend warehouse
 ```
 
-The script handles everything: prerequisites check, authentication, warehouse selection, frontend build, Lakebase provisioning, app deployment, scoring pipeline, and data sync. Takes about 15 minutes end to end.
+It asks which Unity Catalog to use (or takes `--catalog <name>`), creates the schema, uploads and deploys the Databricks App, grants the app's service principal access, creates the 4-hourly scoring job, and prints the app URL. Roughly 5 minutes, and re-running it is safe. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)** for the full flag reference and prerequisites.
 
 ### Data backend (Lakebase or SQL warehouse)
 
-The app reads its scored adoption data from one of two backends, and admins can switch between them live:
+The app reads its scored adoption data from one of two backends:
 
-- **Lakebase** (default) -- low-latency Postgres read model.
-- **SQL warehouse** -- reads the scored Delta tables directly through a serverless SQL warehouse, bypassing Lakebase.
+- **SQL warehouse** (`--data-backend warehouse`) -- reads the scored Delta tables directly through a serverless SQL warehouse. No Lakebase, no Postgres, nothing to sync; the simplest starting point.
+- **Lakebase** (`--data-backend lakebase`, the default) -- provisions a Lakebase Postgres instance for low-latency reads and syncs Delta into it after every scoring run (about 5 minutes more on the first deploy).
 
 ```bash
-./deploy.sh --data-backend warehouse   # provision BOTH, default to warehouse
+python deploy.py --catalog YOUR_CATALOG --data-backend warehouse   # SQL warehouse only, no Lakebase
 ```
 
-With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small, serverless SQL warehouse (1-hour auto-stop), grants the app service principal access to both, and the 4-hour scoring job warms the warehouse each run. Either way an admin can flip the active backend at runtime under **Admin -> Data Backend**, no redeploy needed.
+Either way the deploy also selects or creates a serverless SQL warehouse (the scoring job uses it) and grants the app's service principal access. Deploy with the default Lakebase backend to provision both a Lakebase read model and the warehouse, so an admin can flip the active backend at runtime under **Admin -> Data Backend** without redeploying.
 
 ### Useful flags
 
 | Flag | What it does |
 |------|--------------|
-| `--data-backend warehouse` | Provision both backends; default to the warehouse (drives DBUs). |
-| `--skip-build` | Use the committed prebuilt frontend (no npm / registry access needed). |
+| `--catalog <name>` | Unity Catalog for Quest's scored tables (asked interactively if omitted). |
+| `--data-backend warehouse` | Use the SQL warehouse backend only -- no Lakebase to provision or sync. |
 | `--skip-scoring` | Deploy without running the scoring job now (it still runs on schedule). |
 | `--profile <name>` | Use a specific CLI auth profile (recommended in restricted setups). |
+| `--non-interactive` / `-y` | Never prompt (CI / unattended); requires `--catalog`. |
 
 > **Prerequisite:** the deploying identity must be able to create the scored-tables schema (`CREATE SCHEMA` on the target catalog, or `CREATE CATALOG`). The deploy runs a pre-flight check and fails fast with the exact `GRANT` if it can't. The 4-hour scoring schedule runs even in dev deployments.
 
@@ -228,7 +200,7 @@ System Tables (read-only)          Quest App (Databricks App)
 
 ```
 databricks-quest/
-  deploy.sh               # One-shot deployment script
+  deploy.py                # One-command deployment (cross-platform, SDK-driven)
   databricks.yml           # Bundle config (app, job, variables)
   app/
     main.py                # FastAPI backend (API endpoints)

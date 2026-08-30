@@ -124,7 +124,7 @@ resources:
               - psycopg2-binary
 
 # Host comes from the active CLI profile / DATABRICKS_HOST at deploy time, so the
-# bundle is cloud-agnostic (works on AWS or Azure). deploy.sh exports it.
+# bundle is cloud-agnostic (works on AWS or Azure). deploy.py picks it up from there.
 targets:
   dev:
     mode: development

@@ -1,7 +1,7 @@
 # 18 — Release Checklist
 
 Run this before tagging a release or deploying to a field/customer event. It
-covers both Adoption Mode and Event Mode (GameDay). Check every box.
+covers Adoption Mode. Check every box.
 
 ## 1. Code & build
 
@@ -25,38 +25,12 @@ covers both Adoption Mode and Event Mode (GameDay). Check every box.
 
 ## 3. Adoption Mode (must keep working)
 
-- [ ] Deploy with defaults (no `--event-mode`). GameDay routes return 404; Event
-      UI hidden; GameDay migrations skipped.
+- [ ] Deploy with defaults. With `QUEST_EVENT_MODE` unset, GameDay routes return
+      404, the Event UI is hidden, and GameDay migrations are skipped.
 - [ ] `/api/profile`, `/api/missions`, `/api/leaderboard`, `/api/admin/*` respond.
 - [ ] Scoring pipeline runs and Delta→Lakebase sync populates the leaderboard.
 
-## 4. Event Mode (GameDay)
-
-- [ ] Deploy with `--event-mode` (and `--admins "<you@corp.com>"`).
-- [ ] `/api/health` shows `federation.role`, `validator_types`, and all subsystem
-      `checks` healthy (`lakebase`, `migrations`, `validators`, `scoring`,
-      `sql_warehouse`).
-- [ ] Import a sample pack (`samples/packs/ai_bi_gameday.yml`) — lints with zero
-      errors/warnings and imports as an immutable version.
-- [ ] Create an event + teams; bootstrap team resources (needs
-      `QUEST_SQL_WAREHOUSE_ID`); dry-run plan shows no out-of-namespace targets.
-- [ ] Run the full player loop (join → play → submit → score) and confirm the
-      live leaderboard updates and hint reveals charge once.
-- [ ] Host console: lifecycle transitions, announcements, manual adjustment, and
-      the attempts inspector all work.
-- [ ] Export the post-event report as JSON, CSV, and Markdown.
-
-## 5. Multi-workspace federation (only if shipping federated)
-
-- [ ] Master deploy (`--role master`) provisions the shared Lakebase + event-
-      writer role.
-- [ ] Child deploy (`--role child --master-lakebase-host … --master-lakebase-token …`)
-      connects; `/api/federation/status` reports `role: child` and `db_connected`.
-- [ ] Roster import maps lab users → teams; unmapped scores re-attribute on
-      re-import.
-- [ ] Global leaderboard spans workspaces; child sees its own team's rank.
-
-## 6. Security & governance
+## 4. Security & governance
 
 - [ ] Admin/host endpoints enforce the allowlist (non-admin → 403).
 - [ ] SQL safety: destructive SQL and template injection are refused
@@ -66,14 +40,13 @@ covers both Adoption Mode and Event Mode (GameDay). Check every box.
 - [ ] Reset/bootstrap cannot touch resources outside the event namespace.
 - [ ] Review `docs/12_SECURITY_GOVERNANCE_COST.md` permission model is current.
 
-## 7. Docs
+## 5. Docs
 
-- [ ] `docs/STATUS.md` reflects the shipped PRs.
-- [ ] `README.md` (dual-mode) and `README_GAMEDAY.md` intros list the right PRs.
+- [ ] `README.md` intro is current.
 - [ ] `docs/08_API_CONTRACT.md` matches the deployed endpoints.
 - [ ] Known limitations captured (see below).
 
-## 8. Manual E2E
+## 6. Manual E2E
 
 - [ ] Walk through `docs/19_MANUAL_E2E_TEST.md` end-to-end on a fresh deploy.
 
@@ -85,4 +58,3 @@ covers both Adoption Mode and Event Mode (GameDay). Check every box.
   `manual` validator for completable tasks.
 - Metastore-grant live status is admin-gated (no live polling endpoint).
 - Resource bootstrap/reset and `sql_assertion` require a SQL warehouse.
-- Federation requires a shared Lakebase reachable from child workspaces.

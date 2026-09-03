@@ -1,15 +1,13 @@
 # Databricks Quest -- Deployment Guide
 
-This guide walks you through deploying Databricks Quest on any Databricks workspace. There are four ways to deploy:
+This guide walks you through deploying Databricks Quest on any Databricks workspace. There are two ways to deploy:
 
 | Method | Best For | Time | What It Does |
 |--------|----------|------|-------------|
-| **[Scripted Deploy](#scripted-deploy)** | Most users on macOS/Linux | ~15 min | One command handles everything |
-| **[Python Deploy](#python-deploy)** | Windows, or anywhere without bash/psql | ~5 min | Same flow, driven by the Databricks SDK |
+| **[Python Deploy](#python-deploy)** | Almost everyone (Windows, macOS, Linux) | ~5 min | One command, driven by the Databricks SDK |
 | **[Manual Deploy](#manual-deploy)** | Full control, restricted environments, learning | ~30 min | You run each step yourself |
-| **[Quick Deploy](#quick-deploy)** | Fast testing without DAB | ~10 min | App only, no scheduled scoring |
 
-All of them produce the same result: a running Quest app with scored data. Only the scripted deploy sets up Event Mode (GameDay).
+Both produce the same result: a running Quest app with scored data. Deploying through **Genie Code** is covered in **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)**.
 
 ---
 
@@ -37,9 +35,9 @@ All of them produce the same result: a running Quest app with scored data. Only 
 
 | Tool | Version | How to Install | Required? |
 |------|---------|---------------|-----------|
-| Databricks CLI | v0.285+ | `brew install databricks/tap/databricks` (macOS) or [install guide](https://docs.databricks.com/en/dev-tools/cli/install.html) | Yes for `deploy.sh`; the Python deploy only needs it to log in |
+| Databricks CLI | v0.285+ | `brew install databricks/tap/databricks` (macOS) or [install guide](https://docs.databricks.com/en/dev-tools/cli/install.html) | Yes -- `deploy.py` uses it to authenticate |
 | Node.js | v18+ | `brew install node` (macOS) or [nodejs.org](https://nodejs.org) | No (pre-built frontend included) |
-| psql | Any | `brew install postgresql@16` (macOS) or `apt install postgresql-client` (Linux) | Yes for `deploy.sh` + Lakebase; not needed by the Python deploy |
+| psql | Any | `brew install postgresql@16` (macOS) or `apt install postgresql-client` (Linux) | Only for the **Manual Deploy** Lakebase steps; `deploy.py` never needs it |
 
 To check your versions:
 ```bash
@@ -54,80 +52,15 @@ psql --version          # Any version
 |-----------|-------------|
 | **Databricks App** | React + FastAPI web app hosted on your workspace. Users log in with their existing workspace credentials. |
 | **Scoring Notebook** | Spark notebook that reads system tables and computes missions, points, badges, and leaderboards. |
-| **Scheduled Job** | Runs the scoring notebook every 4 hours to keep data fresh. (Scripted/Manual deploy only) |
+| **Scheduled Job** | Runs the scoring notebook every 4 hours to keep data fresh. (Python/Manual deploy) |
 | **Delta Tables** | 6 tables in your chosen catalog: mission_completions, user_profile_snapshot, leaderboard, badges, notifications, user_points_fact |
 | **Lakebase Database** | Managed PostgreSQL database with the same 6 tables, synced from Delta. Gives the app sub-second response times. |
 
 ---
 
-## Scripted Deploy
-
-The fastest way to get running. One script handles authentication, warehouse selection, frontend build, bundle deployment, Lakebase provisioning, scoring, and data sync.
-
-### Step 1: Clone and run
-
-```bash
-git clone https://github.com/deepbasu123/databricks-quest.git
-cd databricks-quest
-./deploy.sh
-```
-
-The script prompts you for:
-1. **Workspace URL** -- copy this from your browser when logged into Databricks (e.g. `https://adb-1234567890.3.azuredatabricks.net` for Azure, or `https://my-workspace.cloud.databricks.com` for AWS)
-2. **SQL Warehouse** -- pick one from the list
-3. **Catalog name** -- where Quest's tables will live (e.g. `quest_data`)
-
-That's it. The script handles everything else. It takes about 15 minutes, most of which is the scoring pipeline processing system table data.
-
-### Non-interactive mode
-
-If you know your settings ahead of time, skip all prompts:
-
-```bash
-./deploy.sh \
-  --profile my-profile \
-  --warehouse-id a1b2c3d4e5f67890 \
-  --catalog quest_data
-```
-
-### All flags
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--profile NAME` | Databricks CLI profile to use | Prompts for workspace URL |
-| `--warehouse NAME` | Select warehouse by name | Interactive prompt |
-| `--warehouse-id ID` | Use this warehouse ID directly | Interactive prompt |
-| `--catalog NAME` | Unity Catalog name for Quest data | Interactive prompt |
-| `--schema NAME` | Schema name for Quest tables | `quest` |
-| `--app-name NAME` | Custom app name | `databricks-quest` |
-| `--target TARGET` | Bundle target (`dev` or `prod`) | `dev` |
-| `--data-backend lakebase\|warehouse` | `warehouse` provisions BOTH Lakebase and a Small serverless SQL warehouse (1h auto-stop) and defaults the app to the warehouse. Admins switch at runtime under Admin -> Data Backend. | `lakebase` |
-| `--lakebase-host HOST` | Use existing Lakebase endpoint | Auto-provisioned |
-| `--lakebase-db NAME` | Lakebase database name | `quest_db` |
-| `--skip-build` | Skip frontend build (use existing) | Builds if Node.js available |
-| `--skip-scoring` | Skip running the scoring pipeline | Runs every time |
-| `--skip-auth-check` | Skip auth validation (use if already logged in) | Validates auth |
-| `--quick` | Quick deploy mode (no DAB bundle) | Full deploy |
-| `--full` | Full deploy mode (DAB bundle + scoring job) | Default |
-
-### What the script does (step by step)
-
-1. **Checks prerequisites** -- verifies CLI, Node.js, psql versions
-2. **Authenticates** -- opens browser for OAuth if not already logged in
-3. **Selects SQL Warehouse** -- lists your warehouses and lets you pick one
-4. **Asks for catalog** -- where to store Quest's Delta tables
-5. **Builds frontend** -- runs `npm install && npm run build` if Node.js is available, otherwise uses pre-built files
-6. **Deploys to Databricks** -- uses Databricks Asset Bundles to push the app, notebook, and scheduled job
-7. **Provisions Lakebase** -- creates a Lakebase project, database, tables, and grants the app's service principal access
-8. **Runs scoring pipeline** -- executes the scoring notebook once to populate data from system tables
-9. **Syncs to Lakebase** -- reads scored Delta tables and writes them to Lakebase for fast app reads
-10. **Prints app URL** -- shows where to open the app in your browser
-
----
-
 ## Python Deploy
 
-`deploy.sh` is bash and needs `psql`, so it does not run on Windows. `deploy.py` does the same deploy through the Databricks SDK: no bash, no `psql.exe`, no Terraform. It works the same on Windows, macOS, and Linux.
+`deploy.py` runs the whole deploy through the Databricks SDK: no bash, no `psql.exe`, no Terraform. It works the same on Windows, macOS, and Linux.
 
 ```bash
 pip install -r requirements.txt
@@ -139,11 +72,10 @@ It asks which SQL warehouse and which Unity Catalog to use, listing what you alr
 
 From there it creates the schema and `app_settings` table, uploads the app and notebooks, creates and deploys the Databricks App, grants the app's service principal access to Unity Catalog and the warehouse, creates the 4-hourly scoring job, and starts the first run. Re-running it is safe: the app, warehouse, catalog, Lakebase instance, and scoring job are all reused rather than duplicated.
 
-Differences from the scripted deploy:
+Notes:
 
 - It does not use Databricks Asset Bundles, so there is no bundle state to manage.
 - It does not build the frontend; it ships the pre-built `app/static/`.
-- It covers Adoption Mode only. For Event Mode (GameDay), use `deploy.sh --event-mode`.
 
 Full reference, including every flag and the Windows prerequisites: **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
@@ -186,7 +118,7 @@ This opens your browser for OAuth login. After authenticating, the CLI saves a p
 ### Step 3: Clone the repo
 
 ```bash
-git clone https://github.com/deepbasu123/databricks-quest.git
+git clone https://github.com/databricks-solutions/databricks-quest.git
 cd databricks-quest
 ```
 
@@ -512,16 +444,7 @@ Get the service principal name from `databricks apps get databricks-quest` (look
 
 The sync copies data from your Delta tables to Lakebase so the app can read it quickly. Run this after every scoring pipeline execution, or set up a post-scoring sync.
 
-The simplest approach is to run the sync section from the deploy script:
-
-```bash
-./deploy.sh --skip-build --skip-scoring \
-  --catalog quest_data \
-  --warehouse-id YOUR_WAREHOUSE_ID \
-  --lakebase-host YOUR_LAKEBASE_HOST
-```
-
-Or do it manually using `psql` and the SQL Statements API. The sync reads each table from Delta and inserts it into Lakebase. See the `deploy.sh` source (Step 7b) for the full sync implementation.
+The scheduled scoring job handles this automatically: its `sync_to_lakebase` task copies the scored Delta tables into Lakebase after every run. To force a sync now, trigger that job from **Workflows**. To do it by hand, use `psql` and the SQL Statements API to read each table from Delta and insert it into Lakebase.
 
 ### Step 16: Open the app
 
@@ -533,29 +456,11 @@ Open the URL in your browser. You'll authorize the app once, then see your Quest
 
 ---
 
-## Quick Deploy
-
-Quick deploy uses the Databricks Apps API directly without Databricks Asset Bundles. It deploys only the app. You upload and run the scoring notebook separately.
-
-```bash
-./deploy.sh --quick
-```
-
-Or combine with other flags:
-
-```bash
-./deploy.sh --quick --catalog quest_data --warehouse-id YOUR_ID
-```
-
-The difference from full deploy: no `databricks.yml` bundle configuration, no scheduled job. You manage the scoring notebook and Lakebase sync yourself.
-
----
-
 ## After Deployment
 
 ### Data stays fresh automatically
 
-If you used the scripted deploy (full mode) or created a scheduled job in the manual deploy, the scoring pipeline runs every 4 hours. It re-reads system tables, rescores all missions, updates profiles, and rebuilds the leaderboard. The Lakebase sync happens at the end of each deploy script run -- for ongoing syncs, either re-run `./deploy.sh --skip-build` or set up a separate sync process.
+Once deployed, the scoring pipeline runs every 4 hours. It re-reads system tables, rescores all missions, updates profiles, and rebuilds the leaderboard. Its `sync_to_lakebase` task copies the scored Delta tables into Lakebase at the end of every run, so the app stays current with no extra steps.
 
 ### What users see
 
@@ -598,18 +503,18 @@ The scoring pipeline reads these tables that Databricks maintains automatically:
 
 ### Authentication fails after browser login
 
-**Symptom:** The script opens your browser, you log in successfully, the profile is saved, but the script reports "Authentication failed."
+**Symptom:** You log in through the browser, the profile is saved, but the deploy still reports an auth error.
 
-**Cause:** After OAuth login, the CLI creates a named profile (e.g. `adb-1234567890`), but the script's retry check doesn't know which profile to use. This is most common on Azure workspaces.
+**Cause:** After OAuth login the CLI creates a named profile (e.g. `adb-1234567890`), and the deploy doesn't know which profile to use. This is most common on Azure workspaces.
 
-**Fix:** Update to the latest version of `deploy.sh` (this issue is fixed). Or use the workaround:
+**Fix:** Authenticate first, then pass the profile explicitly:
 
 ```bash
-# Authenticate manually first
+# Authenticate
 databricks auth login --host https://YOUR_WORKSPACE_URL
 
-# Then run the script with --skip-auth-check
-./deploy.sh --skip-auth-check --profile YOUR_PROFILE_NAME
+# Then deploy against that profile
+python deploy.py --profile YOUR_PROFILE_NAME --catalog YOUR_CATALOG
 ```
 
 Find your profile name with `databricks auth profiles`.
@@ -630,7 +535,7 @@ Find your profile name with `databricks auth profiles`.
 **Cause:** The app can't read data from Lakebase. This happens when:
 
 1. **Scoring pipeline hasn't run yet.** Re-run it from Workflows > Job Runs in your workspace.
-2. **Lakebase data not synced.** Re-run the sync: `./deploy.sh --skip-build --skip-scoring`
+2. **Lakebase data not synced.** Trigger the scoring job from **Workflows** -- its `sync_to_lakebase` task refreshes Lakebase.
 3. **App environment variables not set.** The app needs `LAKEBASE_HOST` and `LAKEBASE_DB` in `app.yaml`. Check that they have real values (not placeholders). Re-deploy after fixing.
 
 ### "Catalog does not exist and could not be auto-created"
@@ -640,7 +545,7 @@ Some workspaces require an explicit storage location when creating catalogs. Cre
 1. In your workspace, go to **Catalog** in the left sidebar
 2. Click **+ Add** > **Add a catalog**
 3. Name it whatever you want (e.g. `quest_data`)
-4. Re-run: `./deploy.sh --skip-build --catalog quest_data`
+4. Re-run: `python deploy.py --catalog quest_data`
 
 ### No users on the leaderboard
 
@@ -697,9 +602,9 @@ brew upgrade databricks/tap/databricks
 curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 ```
 
-### Deploy script fails mid-way
+### Deploy fails mid-way
 
-The script is safe to re-run. It won't duplicate resources or data. Fix the underlying issue and run `./deploy.sh` again. Use `--skip-build` to save time if the frontend is already built.
+`deploy.py` is safe to re-run. It won't duplicate resources or data -- it reuses the app, warehouse, catalog, Lakebase instance, and scoring job. Fix the underlying issue and run it again.
 
 ---
 

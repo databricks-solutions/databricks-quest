@@ -96,14 +96,23 @@ export const BADGE_CATALOG: BadgeDef[] = [
   {
     id: 'ml_practitioner_badge',
     name: 'ML Practitioner',
-    description: 'Delivered AI/ML workloads on the platform.',
+    description: 'Delivered AI/ML and Data Science workloads on the platform.',
     category: 'AI / ML',
     image: '/assets/badges/ml-practitioner.png',
-    requirement: 'Complete 2 of the core AI/ML missions',
+    requirement: 'Complete 2 of the core Data Science missions',
     criteria: {
       kind: 'missions_count',
       need: 2,
-      missions: ['model_deployer', 'ai_function_builder', 'vector_search_pioneer', 'mlflow_experimenter'],
+      missions: [
+        'model_deployer',
+        'ai_function_builder',
+        'vector_search_pioneer',
+        'mlflow_experimenter',
+        'model_registry_curator',
+        'feature_store_builder',
+        'knowledge_assistant_builder',
+        'multi_agent_supervisor',
+      ],
     },
   },
   {
@@ -112,8 +121,18 @@ export const BADGE_CATALOG: BadgeDef[] = [
     description: 'Shared and governed data through Unity Catalog.',
     category: 'Governance',
     image: '/assets/badges/unity-catalog-champion.png',
-    requirement: 'Publish a table across schemas with Unity Catalog',
-    criteria: { kind: 'missions_all', missions: ['uc_publisher'] },
+    requirement: 'Complete 2 of the core Governance missions',
+    criteria: {
+      kind: 'missions_count',
+      need: 2,
+      missions: [
+        'uc_publisher',
+        'catalog_architect',
+        'external_location_pioneer',
+        'lakehouse_federation_pioneer',
+        'data_sharer',
+      ],
+    },
   },
   {
     id: 'governance_guardian',

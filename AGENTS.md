@@ -4,82 +4,31 @@ This file is the operating guide for AI coding agents working in this repository
 
 ## Product north star
 
-Databricks Quest is evolving from a platform-adoption scoreboard into a configurable Databricks GameDay-style enablement platform for:
+Databricks Quest is a platform-adoption game: a scoring pipeline reads workspace system tables, and a Databricks App shows each user their missions, points, badges, and the weekly leaderboard. It deploys with `deploy.py`. This is **Adoption Mode**, and it is the product.
 
-- large-scale hands-on events
-- sales and solution-engineering enablement
-- hunter account motions
-- internal Databricks field scale
-- customer workshops and competitive team challenges
+The repository also contains **Event Mode** (GameDay) code -- configurable quests, teams, validators, host console, and federation. It is **off by default** (`QUEST_EVENT_MODE`), is **not covered by the user-facing deploy guides**, and has **no supported deploy path**. Treat it as dormant: keep it working where it already lives, but do not advertise it, wire it into deployment, or extend it without an explicit product decision to revive it.
 
-The product must support two modes:
-
-1. **Adoption Mode** — the existing system-table-driven platform adoption game.
-2. **Event Mode** — configurable GameDay-style quests, teams, validations, scoring, leaderboards, host controls, and event reporting.
-
-Do not break Adoption Mode while adding Event Mode.
+Do not break Adoption Mode.
 
 ---
 
 ## Read this first
 
-Read only the files relevant to your task. Do not load every document unless the task is broad architecture or planning work.
+Read only the files relevant to your task. Do not load every document unless the task is broad architecture work.
 
 ### Always read before making code changes
 
-1. `README.md`  
-   Current product summary, deployment model, existing missions, architecture, and repo structure.
-
-2. `docs/00_EXECUTIVE_SUMMARY.md`  
-   The business-level target state and why the project is being levelled up.
-
-3. `docs/13_PR_ALIGNED_SPRINT_PLAN.md`  
-   The intended PR sequence. Use this to keep changes small and aligned.
-
-4. The specific prompt in `prompts/` for the PR or task you are executing.  
-   Example: for validation-engine work, read `prompts/PR03_VALIDATION_ENGINE_CORE.md`.
+1. **`README.md`** -- product summary, deployment model, missions, architecture, and repo structure.
+2. **`SETUP.md` / `docs/WINDOWS_DEPLOY.md`** -- how Quest is deployed with `deploy.py`. `docs/DEPLOY_WITH_GENIE_CODE.md` covers the Genie Code path.
+3. **`docs/15_TEST_STRATEGY_AND_ACCEPTANCE_CRITERIA.md`** -- required validation before finishing a PR.
 
 ### Read for architecture or domain work
 
-5. `docs/03_CODEBASE_DEEP_DIVE.md`  
-   Current-state findings, constraints, and refactor targets.
-
-6. `docs/05_TARGET_ARCHITECTURE.md`  
-   Target architecture for Adoption Mode + Event Mode.
-
-7. `docs/06_QUEST_MODEL_AND_VALIDATION_ENGINE.md`  
-   Quest pack model, validation types, completion flow, and scoring architecture.
-
-8. `docs/07_DATA_MODEL.md`  
-   Delta and Lakebase table design. Use this whenever adding or changing persistence.
-
-9. `docs/08_API_CONTRACT.md`  
-   Backend API contract. Use this before adding endpoints or changing response shapes.
-
-10. `docs/15_TEST_STRATEGY_AND_ACCEPTANCE_CRITERIA.md`  
-    Required validation before finishing a PR.
-
-### Read for event, field, or GTM behaviour
-
-11. `docs/04_AWS_GAMEDAY_RESEARCH_AND_TRANSLATION.md`  
-    Explains how the AWS GameDay format maps into Databricks Quest.
-
-12. `docs/10_EVENT_OPERATIONS_PLAYBOOK.md`  
-    Facilitator and event-operator workflows.
-
-13. `docs/11_FIELD_AND_HUNTER_ACCOUNT_MOTIONS.md`  
-    How the product should support sales, enablement, and account motions.
-
-### Read when modifying quest packs
-
-14. `samples/QUEST_PACK_SCHEMA.md`  
-    Canonical quest pack schema.
-
-15. `samples/SAMPLE_QUEST_PACK_AI_BI.md`  
-    Reference quest pack.
-
-16. `samples/SAMPLE_VALIDATOR_LIBRARY.md`  
-    Reference validator patterns.
+4. **`docs/03_CODEBASE_DEEP_DIVE.md`** -- current-state findings and constraints.
+5. **`docs/05_TARGET_ARCHITECTURE.md`** -- architecture for Adoption Mode and the dormant Event Mode code.
+6. **`docs/06_QUEST_MODEL_AND_VALIDATION_ENGINE.md`** -- quest pack model, validation types, completion flow, and scoring architecture.
+7. **`docs/07_DATA_MODEL.md`** -- Delta and Lakebase table design; read before changing persistence.
+8. **`docs/08_API_CONTRACT.md`** -- backend API contract; read before adding endpoints or changing response shapes.
 
 ---
 
@@ -109,8 +58,8 @@ Read only the files relevant to your task. Do not load every document unless the
 - `notebooks/scoring_pipeline.py`  
   Existing system-table scoring pipeline. Creates Delta tables, scores hard-coded missions, builds profiles, leaderboards, badges, and notifications.
 
-- `deploy.sh`  
-  One-shot deployment flow. Handles Databricks auth, warehouse selection, frontend build, DAB deploy, Lakebase provisioning, scoring run, and Delta-to-Lakebase sync.
+- `deploy.py`  
+  Cross-platform deployment flow (Databricks SDK): auth, warehouse selection, catalog/schema, app deploy, Lakebase provisioning, the 4-hourly scoring job, and grants. See `SETUP.md` / `docs/WINDOWS_DEPLOY.md`.
 
 - `databricks.yml`  
   Databricks Asset Bundle configuration for the app and scheduled scoring job.
@@ -218,10 +167,9 @@ Validation results must include:
 
 ### Deploy and operations
 
-- Do not remove the current one-shot `deploy.sh` value proposition.
-- Preserve non-interactive deployment flags.
-- Keep Databricks CLI, Lakebase, DAB, and scoring pipeline flows documented.
-- Event Mode should add setup flows, not make basic deployment harder.
+- `deploy.py` is the one deployment path. Preserve its non-interactive flags (`--non-interactive`, `--catalog`, `--profile`, `--data-backend`).
+- Keep Databricks CLI, Lakebase, and scoring-pipeline flows documented in `SETUP.md` / `docs/WINDOWS_DEPLOY.md`.
+- Keep deployment simple; do not reintroduce an Event Mode deploy path without a product decision.
 
 ---
 
@@ -255,22 +203,20 @@ Common doc updates:
 - API change → `docs/08_API_CONTRACT.md`
 - table/model change → `docs/07_DATA_MODEL.md`
 - architecture change → `docs/05_TARGET_ARCHITECTURE.md`
-- event operator change → `docs/10_EVENT_OPERATIONS_PLAYBOOK.md`
-- PR sequencing change → `docs/13_PR_ALIGNED_SPRINT_PLAN.md`
+- deploy change → `SETUP.md` and `docs/WINDOWS_DEPLOY.md`
 - validation behaviour change → `docs/06_QUEST_MODEL_AND_VALIDATION_ENGINE.md`
 
 ---
 
 ## How to start a task
 
-1. Identify the PR/sprint number or task area.
+1. Identify the task area.
 2. Read this file.
-3. Read the relevant prompt in `prompts/`.
-4. Read only the docs listed for that task area.
-5. Inspect the code files you will modify.
-6. Make the smallest coherent change.
-7. Run relevant checks.
-8. Summarize:
+3. Read only the docs listed for that task area.
+4. Inspect the code files you will modify.
+5. Make the smallest coherent change.
+6. Run relevant checks.
+7. Summarize:
    - files changed
    - behaviour added/changed
    - tests/checks run

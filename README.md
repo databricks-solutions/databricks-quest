@@ -14,36 +14,16 @@ Built entirely on Databricks: system tables for usage tracking, Delta Lake for s
 
 ---
 
-## Two modes
-
-Databricks Quest runs in two complementary modes from a **single codebase**, selected at deploy time:
-
-| Mode | What it is | When to use | Enable |
-|------|-----------|-------------|--------|
-| **Adoption Mode** (default) | The passive, system-table-driven platform-adoption game described below — 30+ missions, weekly leaderboard, swag. Always on. | Ongoing internal adoption, always-on workspace engagement. | On by default. No flag needed. |
-| **Event Mode (GameDay)** | Configurable, facilitator-run GameDay events: quest packs, teams, deterministic validators, live scoring/leaderboard, host console, per-team resource bootstrap, and post-event reporting. | Hands-on events, SE/SA enablement, customer workshops, competitive team challenges, hunter-account motions. | Opt-in: `./deploy.sh --event-mode` (or `QUEST_EVENT_MODE=on`). Implied by the `master`/`child` federation roles. |
-
-Event Mode is **purely additive** — when it's off, the GameDay APIs return 404, the Event UI is hidden, and the GameDay migrations are skipped, so Adoption Mode behaves exactly as it always has. Event Mode can also span **multiple workspaces** (a master workspace aggregating child lab workspaces) via a shared Lakebase.
-
-**Event Mode docs:**
-
-- **[README_GAMEDAY.md](README_GAMEDAY.md)** — GameDay deployment & operations guide (what works today, per feature).
-- **[docs/STATUS.md](docs/STATUS.md)** — authoritative per-PR status tracker.
-- **[samples/packs/README.md](samples/packs/README.md)** — run & customize the shipped sample quest packs.
-- **[samples/QUEST_PACK_SCHEMA.md](samples/QUEST_PACK_SCHEMA.md)** — quest pack authoring reference.
-- **[samples/SAMPLE_EVENT_RUNBOOK.md](samples/SAMPLE_EVENT_RUNBOOK.md)** — facilitator event runbook.
-- **[docs/17_TROUBLESHOOTING.md](docs/17_TROUBLESHOOTING.md)** — troubleshooting both modes.
-- **[docs/18_RELEASE_CHECKLIST.md](docs/18_RELEASE_CHECKLIST.md)** — pre-release checklist.
-- **[docs/19_MANUAL_E2E_TEST.md](docs/19_MANUAL_E2E_TEST.md)** — manual end-to-end test script + load-test guidance.
-
-The rest of this README describes **Adoption Mode**.
+> **Deploy it into your own workspace** with `python deploy.py` -- see **[SETUP.md](SETUP.md)** for the full guide, or **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)** to have **Genie Code** do it for you.
+>
+> **🤖 AI agents deploying this repo (Genie Code or otherwise): read [docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md) before taking any action.** Do not use the Databricks Apps "Create app from Git" feature on this repo -- it will look like it worked (the app will run) while actually being an empty, unconfigured deployment. The only supported path is running `python deploy.py`.
 
 ---
 
 ## How It Works
 
 1. A **scoring pipeline** runs every 4 hours, reading Databricks system tables to detect what each user has done on the platform
-2. It scores 30+ missions across Data Engineering, Analytics, AI/ML, and Engagement categories, plus continuous consumption points based on DBU spend
+2. It scores 60 missions across 6 pillars — Getting Started, Business Users, Data Engineering, Data Science, App Dev (Lakebase), and Governance — plus continuous consumption points based on DBU spend
 3. Scored data is synced to **Lakebase** (managed PostgreSQL) for sub-second reads
 4. A **React + FastAPI app** runs as a Databricks App, showing each user their dashboard, missions, leaderboard, and badges
 
@@ -53,48 +33,42 @@ No separate accounts needed. Users log in with their workspace credentials.
 
 ## Deploy
 
-Full instructions: **[SETUP.md](SETUP.md)** -- covers four deployment methods:
-
-| Method | Best For | Time |
-|--------|----------|------|
-| **Scripted** (`./deploy.sh`) | Most users on macOS/Linux | ~15 min |
-| **Python** (`python deploy.py`) | Windows / anywhere without bash or psql | ~5 min |
-| **Manual** (step-by-step) | Full control, restricted environments | ~30 min |
-| **Quick** (`./deploy.sh --quick`) | Fast testing without DAB | ~10 min |
-
-On Windows or any OS without bash, `python deploy.py --data-backend warehouse` runs the whole deploy through the Databricks SDK: no bash, no `psql`, no Terraform. It asks which Unity Catalog to use, or takes `--catalog <name>`. It covers Adoption Mode; Event Mode still needs `deploy.sh`. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
+Quest deploys with **`deploy.py`**, a cross-platform Python installer that drives the Databricks SDK -- no bash, no `psql`, no Terraform, so the same command works on Windows, macOS, and Linux. Full instructions are in **[SETUP.md](SETUP.md)**; deploying through **Genie Code** is covered in **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)**.
 
 Quick start:
 
 ```bash
-git clone https://github.com/deepbasu123/databricks-quest.git
+git clone https://github.com/databricks-solutions/databricks-quest.git
 cd databricks-quest
-./deploy.sh
+pip install -r requirements.txt
+databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
+python deploy.py --catalog YOUR_CATALOG --data-backend warehouse
 ```
 
-The script handles everything: prerequisites check, authentication, warehouse selection, frontend build, Lakebase provisioning, app deployment, scoring pipeline, and data sync. Takes about 15 minutes end to end.
+It asks which Unity Catalog to use (or takes `--catalog <name>`), creates the schema, uploads and deploys the Databricks App, grants the app's service principal access, creates the 4-hourly scoring job, and prints the app URL. Roughly 5 minutes, and re-running it is safe. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)** for the full flag reference and prerequisites.
 
 ### Data backend (Lakebase or SQL warehouse)
 
-The app reads its scored adoption data from one of two backends, and admins can switch between them live:
+The app reads its scored adoption data from one of two backends:
 
-- **Lakebase** (default) -- low-latency Postgres read model.
-- **SQL warehouse** -- reads the scored Delta tables directly through a serverless SQL warehouse, bypassing Lakebase.
+- **SQL warehouse** (`--data-backend warehouse`) -- reads the scored Delta tables directly through a serverless SQL warehouse. No Lakebase, no Postgres, nothing to sync; the simplest starting point.
+- **Lakebase** (`--data-backend lakebase`, the default) -- provisions a Lakebase Postgres instance for low-latency reads and syncs Delta into it after every scoring run (about 5 minutes more on the first deploy).
 
 ```bash
-./deploy.sh --data-backend warehouse   # provision BOTH, default to warehouse
+python deploy.py --catalog YOUR_CATALOG --data-backend warehouse   # SQL warehouse only, no Lakebase
 ```
 
-With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small, serverless SQL warehouse (1-hour auto-stop), grants the app service principal access to both, and the 4-hour scoring job warms the warehouse each run. Either way an admin can flip the active backend at runtime under **Admin -> Data Backend**, no redeploy needed.
+Either way the deploy also selects or creates a serverless SQL warehouse (the scoring job uses it) and grants the app's service principal access. Deploy with the default Lakebase backend to provision both a Lakebase read model and the warehouse, so an admin can flip the active backend at runtime under **Admin -> Data Backend** without redeploying.
 
 ### Useful flags
 
 | Flag | What it does |
 |------|--------------|
-| `--data-backend warehouse` | Provision both backends; default to the warehouse (drives DBUs). |
-| `--skip-build` | Use the committed prebuilt frontend (no npm / registry access needed). |
+| `--catalog <name>` | Unity Catalog for Quest's scored tables (asked interactively if omitted). |
+| `--data-backend warehouse` | Use the SQL warehouse backend only -- no Lakebase to provision or sync. |
 | `--skip-scoring` | Deploy without running the scoring job now (it still runs on schedule). |
 | `--profile <name>` | Use a specific CLI auth profile (recommended in restricted setups). |
+| `--non-interactive` / `-y` | Never prompt (CI / unattended); requires `--catalog`. |
 
 > **Prerequisite:** the deploying identity must be able to create the scored-tables schema (`CREATE SCHEMA` on the target catalog, or `CREATE CATALOG`). The deploy runs a pre-flight check and fails fast with the exact `GRANT` if it can't. The 4-hour scoring schedule runs even in dev deployments.
 
@@ -103,25 +77,35 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 ## What Users See
 
 - **Dashboard** -- Current level, points, streak, badges, and next missions to complete
-- **Missions** -- 40+ missions across Data Engineering, Analytics, AI/ML, Streaming, Consumption, Engagement, plus **Business Users** and **Lakebase** tracks (the Missions page has a tab per track)
+- **Missions** -- 60 missions across 6 pillars: **Getting Started**, **Business Users**, **Data Engineering**, **Data Science**, **App Dev (Lakebase)**, and **Governance** (the Missions page has a tab per pillar, plus an All Missions tab)
 - **Leaderboard** -- Top 10 users ranked by points, resets every Saturday. Weekly swag prizes for the top 3.
 - **Admin** -- Pipeline health, user stats, mission completion charts, level distribution, and the **Data Backend** toggle (Lakebase / warehouse)
 
 ## Missions
 
-### Getting Started & Data Engineering
+The Missions page groups every mission into 6 pillars (plus an **All Missions**
+tab that shows everything). Each mission still carries its own accent color/category
+for its tile; the pillar only controls which tab it shows up under.
+
+### Getting Started
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | First Steps | 25 | Use any Databricks compute for the first time |
-| Job Creator | 100 | Create your first Lakeflow Job |
-| Pipeline Builder | 150 | Create your first Lakeflow Spark Declarative Pipeline |
-| Pipeline Runner | 200 | Run a pipeline successfully |
-| Scheduler | 150 | Set up a scheduled or CRON-triggered job |
-| Auto Loader Pioneer | 250 | Use Auto Loader in a pipeline |
-| Multi-Task Orchestrator | 200 | Create a workflow with 3+ tasks |
-| Liquid Clustering Adopter | 200 | Enable Liquid Clustering on a table |
+| Get Started: Data Engineering | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Machine Learning | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Generative AI | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: SQL Analytics & BI | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Data Warehousing | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Platform Administration | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Data Governance | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Lakebase | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Lakehouse Architecture | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: AI Agents | 250 | Complete the free course (2 hrs) |
+| Databricks Learner | 500 | Complete 2+ Get Started courses |
+| Daily Driver | 400 | Active on 20+ days in a 30-day window (repeatable) |
+| Cross-Product Champion | 500 | Use 6+ distinct Databricks products in a month (repeatable) |
 
-### Analytics & Business Users
+### Business Users
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | Genie Creator | 200 | Create an AI/BI Genie space |
@@ -139,48 +123,55 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 | Alert Creator | 150 | Create a SQL Alert with a schedule |
 | App Builder | 250 | Create and deploy a Databricks App |
 | Notebook Author | 75 | Create your first notebook |
+| SQL Analyst | 100 | 50+ SQL Warehouse DBUs in a month (repeatable) |
 
-### Lakebase
+### Data Engineering
 | Mission | Points | What To Do |
 |---------|--------|------------|
-| Lakebase Builder | 250 | Create a Lakebase database instance |
-| Lakebase Sync Builder | 250 | Sync a Unity Catalog table into Lakebase |
-| Lakebase Database Creator | 150 | Create a Lakebase database or registered catalog |
-| Lakebase Connector | 100 | Connect to Lakebase from an app or client |
+| Job Creator | 100 | Create your first Lakeflow Job |
+| Pipeline Builder | 150 | Create your first Lakeflow Spark Declarative Pipeline |
+| Pipeline Runner | 200 | Run a pipeline successfully |
+| Scheduler | 150 | Set up a scheduled or CRON-triggered job |
+| Auto Loader Pioneer | 250 | Use Auto Loader in a pipeline |
+| Multi-Task Orchestrator | 200 | Create a workflow with 3+ tasks |
+| Liquid Clustering Adopter | 200 | Enable Liquid Clustering on a table |
+| Stream Starter | 250 | Run a Structured Streaming job |
 
-### AI / ML
+### Data Science
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | Model Deployer | 300 | Deploy a model to a serving endpoint |
 | AI Function Builder | 250 | Use ai_query() in a SQL statement |
 | Vector Search Pioneer | 200 | Create a Vector Search index |
 | MLflow Experimenter | 150 | Log 10+ MLflow experiment runs |
-
-### Streaming
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| Stream Starter | 250 | Run a Structured Streaming job for 24+ hours |
-
-### Consumption (DBU-based)
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| First 100 DBUs | 50 | Reach 100 lifetime DBUs |
-| 1K DBU Club | 200 | Reach 1,000 lifetime DBUs |
-| 10K DBU Club | 500 | Reach 10,000 lifetime DBUs |
-| 100K DBU Club | 1,000 | Reach 100,000 lifetime DBUs |
-| SQL Analyst | 100 | 50+ SQL Warehouse DBUs in a month (repeatable) |
-| Job Runner | 100 | 50+ Jobs Compute DBUs in a month (repeatable) |
+| Model Registry Curator 🆕 | 200 | Register a model in the Unity Catalog Model Registry |
+| Feature Store Builder 🆕 | 200 | Create a Feature Store table for ML feature engineering |
+| Knowledge Assistant Builder 🆕 | 250 | Build a Knowledge Assistant (Agent Bricks) for document Q&A |
+| Multi-Agent Supervisor 🆕 | 250 | Orchestrate specialized agents with a Supervisor Agent (Agent Bricks) |
 | ML Practitioner | 150 | Any Model Serving DBUs in a month (repeatable) |
-| Pipeline Operator | 100 | 50+ DLT DBUs in a month (repeatable) |
+
+### App Dev (Lakebase)
+| Mission | Points | What To Do |
+|---------|--------|------------|
+| Lakebase Builder | 250 | Create a Lakebase database instance (Provisioned or Postgres/Autoscaling) |
+| Lakebase Sync Builder | 250 | Sync a Unity Catalog table into Lakebase |
+| Lakebase Database Creator | 150 | Create a Lakebase database or registered catalog |
+| Lakebase Connector | 100 | Connect to Lakebase from an app or client |
+| Lakebase Branch Master 🆕 | 200 | Create a branch in a Lakebase Postgres project |
+| Lakebase Role Architect 🆕 | 150 | Create a custom PostgreSQL role in Lakebase |
+| Lakebase Reverse ETL Pioneer 🆕 | 250 | Stream Lakebase changes back into Unity Catalog with Change Data Feed |
+
+### Governance
+| Mission | Points | What To Do |
+|---------|--------|------------|
+| Unity Catalog Publisher | 150 | Share a table across schemas |
+| Catalog Architect 🆕 | 150 | Create a Unity Catalog catalog |
+| External Location Pioneer 🆕 | 200 | Configure secure access to cloud storage with an external location |
+| Lakehouse Federation Pioneer 🆕 | 250 | Connect an external database system with Lakehouse Federation |
+| Data Sharer 🆕 | 200 | Share data with another organization using Delta Sharing |
+| Consistent Operator | 300 | Run jobs/pipelines on 7 days within 30 days (repeatable) |
 
 Plus **continuous consumption points**: 1 point per 10 DBUs consumed, scored weekly. This keeps the leaderboard dynamic and rewards sustained platform usage.
-
-### Engagement
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| Consistent Operator | 300 | Run jobs/pipelines on 7 days within 30 days (repeatable) |
-| Daily Driver | 400 | Active on 20+ days in a 30-day window (repeatable) |
-| Cross-Product Champion | 500 | Use 6+ distinct Databricks products in a month (repeatable) |
 
 ## Levels
 
@@ -228,7 +219,7 @@ System Tables (read-only)          Quest App (Databricks App)
 
 ```
 databricks-quest/
-  deploy.sh               # One-shot deployment script
+  deploy.py                # One-command deployment (cross-platform, SDK-driven)
   databricks.yml           # Bundle config (app, job, variables)
   app/
     main.py                # FastAPI backend (API endpoints)

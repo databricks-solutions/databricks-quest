@@ -32,7 +32,16 @@ const BAR_COLORS = ['#FF5F1F', '#00C2D7', '#8B5CF6', '#22C55E', '#F43F5E', '#3B8
 
 const TOOLTIP_STYLE = { background: '#0D1320', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, color: '#F1F5F9' }
 
-export default function AdminPanel() {
+// The "Insights" page (nav label; internally still routed/named "admin") is
+// open to every user -- pipeline health, KPIs, and the completion/level
+// charts below are read-only platform telemetry, and the backing endpoints
+// (/api/admin/stats, /api/admin/pipeline-status) accept any authenticated
+// user. Only the two sections with real write/privilege consequences are
+// still admin-gated, both server-side (require_admin) and here so a non-admin
+// never sees controls that would just 403 if clicked: DataBackendToggle can
+// switch what every user's data reads from, and AdminsManager can grant or
+// revoke admin access itself.
+export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
   const stats = useApi<AdminStats>('/api/admin/stats')
   const pipeline = useApi<PipelineStatus>('/api/admin/pipeline-status')
 
@@ -85,7 +94,7 @@ export default function AdminPanel() {
         </div>
       </QuestCard>
 
-      <DataBackendToggle />
+      {isAdmin && <DataBackendToggle />}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={Users} label="Total Users" value={s ? s.total_users.toLocaleString() : undefined} accent="#00C2D7" loading={stats.loading && !s} />
@@ -165,7 +174,7 @@ export default function AdminPanel() {
         </div>
       </QuestCard>
 
-      <AdminsManager />
+      {isAdmin && <AdminsManager />}
     </div>
   )
 }

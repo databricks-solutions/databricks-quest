@@ -3,7 +3,7 @@ import {
   LayoutDashboard,
   Target,
   Trophy,
-  Settings,
+  Gauge,
   Bell,
   ChevronRight,
   Gift,
@@ -34,7 +34,7 @@ const BASE_NAV_ITEMS: NavItem[] = [
   { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
   { id: 'badges', label: 'Badges', icon: Award },
   { id: 'rewards', label: 'Rewards', icon: Gift },
-  { id: 'admin', label: 'Admin', icon: Settings },
+  { id: 'admin', label: 'Insights', icon: Gauge },
 ]
 
 const pageTitles: Record<NavPage, { title: string; subtitle: string }> = {
@@ -43,7 +43,7 @@ const pageTitles: Record<NavPage, { title: string; subtitle: string }> = {
   leaderboard: { title: 'Leaderboard', subtitle: 'Weekly competition across Databricks platform explorers' },
   badges: { title: 'Badge Vault', subtitle: 'Track achievements and unlock mastery milestones' },
   rewards: { title: 'Rewards', subtitle: 'Recognition and weekly eligibility' },
-  admin: { title: 'Admin', subtitle: 'Platform adoption telemetry and scoring health' },
+  admin: { title: 'Insights', subtitle: 'Platform adoption telemetry and scoring health' },
   federation: { title: 'Event', subtitle: 'Join an event, play quests, and track your team' },
 }
 
@@ -119,10 +119,13 @@ export default function App() {
     fetchHealth()
   }, [fetchProfile, fetchNotifications, fetchFederation, fetchHealth])
 
-  // Admin page is gated server-side (QUEST_ADMIN_ALLOWLIST); hide the nav item
-  // unless the profile says this user is an admin. Admin is the last base item,
-  // so dropping it keeps the dashboard/missions indices stable below.
-  const baseNav = BASE_NAV_ITEMS.filter((i) => i.id !== 'admin' || profile?.is_admin)
+  // Insights (formerly "Admin") is visible to everyone -- it's read-only
+  // platform telemetry. Only the Data Backend switch and admin-management
+  // panels inside it are still gated server-side (QUEST_ADMIN_ALLOWLIST); see
+  // the `isAdmin` prop passed to <AdminPanel> below. No profile-dependent
+  // filtering here means the nav item never has to wait on /api/profile to
+  // appear.
+  const baseNav = BASE_NAV_ITEMS
   // Event Mode is opt-in and server-driven: the Event nav only appears when the
   // backend reports it on (federation/status 404s otherwise, leaving this null).
   const isEventMode = !!federation && federation.event_mode !== false
@@ -265,7 +268,7 @@ export default function App() {
             {page === 'leaderboard' && <Leaderboard profile={profile} />}
             {page === 'badges' && <BadgeVault profile={profile} />}
             {page === 'rewards' && <Rewards profile={profile} />}
-            {page === 'admin' && profile?.is_admin && <AdminPanel />}
+            {page === 'admin' && <AdminPanel isAdmin={!!profile?.is_admin} />}
             {page === 'federation' && federation &&
               (federation.role === 'master' ? (
                 federation.event_id || federation.event_slug ? (

@@ -1175,7 +1175,7 @@ async def get_notifications(request: Request):
 
 
 @app.get("/api/admin/stats")
-async def get_admin_stats(user: str = Depends(require_admin)):
+async def get_admin_stats(user: str = Depends(get_user_email)):
     try:
         user_count = execute_query("SELECT COUNT(DISTINCT user_id) AS cnt FROM user_profile_snapshot")
         mission_count = execute_query("SELECT COUNT(*) AS cnt FROM mission_completions")
@@ -1218,7 +1218,7 @@ async def get_admin_stats(user: str = Depends(require_admin)):
 
 
 @app.get("/api/admin/pipeline-status")
-async def get_pipeline_status(user: str = Depends(require_admin)):
+async def get_pipeline_status(user: str = Depends(get_user_email)):
     try:
         latest = execute_query("SELECT MAX(updated_at) AS last_run FROM user_profile_snapshot")
         last_run = latest[0]["last_run"] if latest and latest[0].get("last_run") else None
@@ -1233,8 +1233,11 @@ async def get_pipeline_status(user: str = Depends(require_admin)):
 
 
 # ---------------------------------------------------------------------------
-# Data backend toggle (admin) — both Lakebase and a SQL warehouse are
-# provisioned; admins switch which one serves adoption data, at runtime.
+# Data backend toggle — both Lakebase and a SQL warehouse are provisioned.
+# Reading which one is active is open to any user (it's the "Insights" page's
+# read-only telemetry, see app.yaml/frontend AdminPanel.tsx); actually
+# switching it (POST, below) stays admin-only since it changes what every
+# user's data reads from.
 # ---------------------------------------------------------------------------
 
 class DataBackendPayload(BaseModel):
@@ -1242,7 +1245,7 @@ class DataBackendPayload(BaseModel):
 
 
 @app.get("/api/admin/data-backend")
-async def get_data_backend_setting(user: str = Depends(require_admin)):
+async def get_data_backend_setting(user: str = Depends(get_user_email)):
     try:
         active = db.get_data_backend()
     except Exception:

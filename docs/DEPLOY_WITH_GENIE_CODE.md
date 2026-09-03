@@ -6,7 +6,9 @@
 > **`python deploy.py`** at the repo root. Do **not** use the Databricks Apps
 > **"Create app from Git" / Git-linked-app** feature for this repo -- pointing an
 > app resource directly at this GitHub repo (root or `app/` subdirectory) skips
-> catalog/schema setup, the SQL warehouse grant, and the scheduled scoring job.
+> **all** of the backend setup: Unity Catalog (catalog/schema/tables), Lakebase
+> (if that backend), the SQL warehouse grant, and the scheduled scoring job --
+> confirmed in practice, none of it gets created, not just some of it.
 > It produces an app that *runs* (so it can look like success) but is hollow:
 > `/api/health` reports `db_connected: false`, and every page is empty. See
 > [If Genie Code already created a git-linked app](#if-genie-code-already-created-a-git-linked-app-recover-dont-delete)
@@ -105,13 +107,26 @@ anyway, expect this exact failure chain, seen in practice:
    crash** -- `app/app.yaml` and `app/main.py` are found and `uvicorn` boots. This
    looks like success (`ApplicationState.RUNNING`, a live URL) and it's tempting to
    stop here.
-4. **It is still broken.** The `app/app.yaml` picked up from Git is the committed
-   placeholder -- it declares no `QUEST_CATALOG`, `QUEST_SCHEMA`,
-   `QUEST_DATA_BACKEND`, `QUEST_SQL_WAREHOUSE_ID`, or `LAKEBASE_HOST`. No catalog or
-   schema was created, no warehouse was granted, and the scoring job was never
-   scheduled. `GET /api/health` will show `db_connected: false`; every page in the
-   app will be empty. Do not report this as a successful deployment even though the
-   app is `RUNNING` -- verification step 4 below exists specifically to catch this.
+4. **It is still broken -- confirmed in practice, none of the backend exists.**
+   Deploying from Git only ever does the equivalent of `deploy.py`'s step 7
+   ("Creating and deploying app"). Every other one of its 10 steps was skipped, so
+   **none** of this exists:
+   - **Unity Catalog** -- no catalog, no schema, no `mission_completions` /
+     `leaderboard` / `badges` / `app_settings` tables (step 4).
+   - **Lakebase** -- no Postgres instance provisioned, even if you intended the
+     `lakebase` backend (the default) (step 6).
+   - **SQL warehouse grant** -- the app's service principal has no `CAN_USE` on any
+     warehouse, even for the `warehouse` backend (steps 3, 8).
+   - **Scoring job** -- no `[Quest] Scoring Pipeline (...)` job exists at all, so
+     nothing will ever be scored, scheduled or otherwise (step 9).
+   - **Real `app.yaml`** -- the one picked up from Git is the committed
+     placeholder; it declares no `QUEST_CATALOG`, `QUEST_SCHEMA`,
+     `QUEST_DATA_BACKEND`, `QUEST_SQL_WAREHOUSE_ID`, or `LAKEBASE_HOST` at all.
+
+   `GET /api/health` will show `db_connected: false`; every page in the app will be
+   empty forever, not just until a scoring run finishes. Do not report this as a
+   successful deployment even though the app is `RUNNING` -- verification step 4
+   below exists specifically to catch this.
 
 ### If Genie Code already created a git-linked app: recover, don't delete
 

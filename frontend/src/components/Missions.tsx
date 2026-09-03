@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { CheckCircle2, Circle, Repeat, Sparkles } from 'lucide-react'
-import type { Mission } from '../types'
+import type { Mission, UserProfile } from '../types'
 import { useApi } from '../lib/api'
 import { categoryMeta, difficultyForPoints, missionIcon } from '../lib/mission-meta'
 import { QuestCard } from './quest/QuestCard'
@@ -21,7 +21,13 @@ const PILLAR_ORDER = [
   'Governance',
 ]
 
-export default function Missions({ onProfileRefresh }: { onProfileRefresh?: () => void }) {
+export default function Missions({
+  profile,
+  onProfileRefresh,
+}: {
+  profile?: UserProfile | null
+  onProfileRefresh?: () => void
+}) {
   const { data, loading, loaded, error, reload } = useApi<MissionsResponse>('/api/missions')
   const [filter, setFilter] = useState<string>('all')
   const [selected, setSelected] = useState<Mission | null>(null)
@@ -40,10 +46,25 @@ export default function Missions({ onProfileRefresh }: { onProfileRefresh?: () =
     return ['all', ...ordered, ...leftover]
   }, [missions])
   const filtered = filter === 'all' ? missions : missions.filter((m) => trackOf(m) === filter)
-  const completed = missions.filter((m) => m.status === 'completed').length
   const total = missions.length
-  const pointsEarned = missions.filter((m) => m.status === 'completed').reduce((sum, m) => sum + m.points, 0)
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0
+
+  // Distinct-mission count + a naive "points from currently-completed missions"
+  // sum, derived client-side from this catalog snapshot. Used only as a fallback
+  // while `profile` hasn't loaded yet -- once it has, the authoritative numbers
+  // below take over. Kept separate on purpose: this local sum can never account
+  // for a repeatable mission (daily_driver, ml_practitioner, ...) having been
+  // re-earned across multiple past periods, so it will UNDERCOUNT relative to
+  // the profile's true lifetime total for any account with repeat history. Using
+  // it as anything other than a brief loading placeholder is what caused the
+  // Missions page to disagree with the Dashboard.
+  const completedLocal = missions.filter((m) => m.status === 'completed').length
+  const pointsEarnedLocal = missions.filter((m) => m.status === 'completed').reduce((sum, m) => sum + m.points, 0)
+
+  // Authoritative once profile has loaded: same source the Dashboard reads, so
+  // the two pages can never show different numbers for the same account.
+  const completed = profile?.missions_completed ?? completedLocal
+  const pointsEarned = profile ? profile.total_points : pointsEarnedLocal
+  const pct = total > 0 ? Math.round((Math.min(completed, total) / total) * 100) : 0
 
   const showError = loaded && error && missions.length === 0
 
@@ -54,7 +75,7 @@ export default function Missions({ onProfileRefresh }: { onProfileRefresh?: () =
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#F5B72E]">Mission progress</p>
             <h2 className="mt-2 text-2xl font-bold text-white">{completed} of {total} missions complete</h2>
-            <p className="mt-1 text-sm text-slate-300">{pointsEarned.toLocaleString()} points earned from completed missions</p>
+            <p className="mt-1 text-sm text-slate-300">{pointsEarned.toLocaleString()} points earned all-time</p>
           </div>
           <div className="w-full max-w-sm">
             <div className="mb-2 flex justify-between text-xs text-slate-400">

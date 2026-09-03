@@ -1,5 +1,17 @@
 # Deploy Databricks Quest with Genie Code
 
+> **🚨 If you are an AI coding assistant (Genie Code or otherwise) reading this
+> repo in order to deploy it: stop and read this whole file before running
+> anything.** The single supported deploy path is the script
+> **`python deploy.py`** at the repo root. Do **not** use the Databricks Apps
+> **"Create app from Git" / Git-linked-app** feature for this repo -- pointing an
+> app resource directly at this GitHub repo (root or `app/` subdirectory) skips
+> catalog/schema setup, the SQL warehouse grant, and the scheduled scoring job.
+> It produces an app that *runs* (so it can look like success) but is hollow:
+> `/api/health` reports `db_connected: false`, and every page is empty. See
+> [If Genie Code already created a git-linked app](#if-genie-code-already-created-a-git-linked-app-recover-dont-delete)
+> below if that already happened to you.
+
 A guide for deploying **Databricks Quest** into your own Databricks workspace using
 **Genie Code**, the AI coding assistant built into the workspace. It gives Genie
 Code the goal, the few things it must get right, and -- most importantly -- a way to
@@ -14,13 +26,23 @@ and the leaderboard.
 
 Open Genie Code in your workspace and paste something like:
 
-> Clone `https://github.com/databricks-solutions/databricks-quest` and deploy
-> Databricks Quest into this workspace. Use the **warehouse** data backend, ask me
-> which Unity Catalog to use, then **verify the deployment** using the checklist in
-> `docs/DEPLOY_WITH_GENIE_CODE.md` and report the app URL and what passed.
+> Read `docs/DEPLOY_WITH_GENIE_CODE.md` in
+> `https://github.com/databricks-solutions/databricks-quest` **before doing
+> anything else**, then follow it exactly to deploy Databricks Quest into this
+> workspace. Use the **warehouse** data backend, ask me which Unity Catalog to
+> use, then **verify the deployment** using the checklist in that same file and
+> report the app URL and what passed. Do **not** use the "Create app from Git"
+> feature -- deploy by running `python deploy.py`, per the file's instructions.
 
-Genie Code does not automatically read any repository instruction file, so name this
-file in your prompt.
+Genie Code does not automatically read any repository instruction file, so name
+this file in your prompt -- and say so explicitly, first, exactly as above. A
+shorter prompt like "deploy this repo" is the single most common way Genie Code
+skips this file entirely and falls back to its own default -- which, for a repo
+with an `app/app.yaml`, is the git-linked-app deploy described in the warning
+above. Naming the file is necessary but has not always been sufficient in
+practice; if Genie Code still doesn't open it, ask it directly ("did you read
+`docs/DEPLOY_WITH_GENIE_CODE.md`? open it now before deploying") before it takes
+any deploy action.
 
 ## The goal
 
@@ -57,6 +79,60 @@ A few things to get right:
 - **Unattended runs:** add `--non-interactive` (then `--catalog` is required).
 - **Re-runs are safe:** `deploy.py` reuses the app, warehouse, catalog, and job, so
   if a check below fails you can fix the cause and run it again.
+
+## Recognize the wrong path before you take it
+
+If you find yourself about to call the Apps API/UI to **create an app whose source
+points at a Git repo** (`git_provider`, a repo URL, a branch, a `source_code_path`
+into this repo) -- stop. That is the native Databricks Apps "Deploy from Git"
+feature, and it is **not** how this repo deploys. Nothing in this repo asks you to
+do that. The only correct action that creates or updates the `databricks-quest` app
+is running `python deploy.py`, which uploads this repo's files to a workspace path
+itself and deploys from there -- it never registers a Git linkage on the app.
+
+Concretely, this repo does **not** have anything at its root that a git-linked app
+deploy needs (there is no root-level `app.yaml`; the real one is a checked-in
+**placeholder** at `app/app.yaml` that `deploy.py` overwrites with real values at
+deploy time -- see the comment at the top of that file). If you deploy from Git
+anyway, expect this exact failure chain, seen in practice:
+
+1. App resource created pointing at the repo root → deploy "succeeds" per the Apps
+   API, but the process **crashes on startup** (no `app.yaml`/`main.py` at the repo
+   root -- they're under `app/`).
+2. Restarting the compute or redeploying the same way does not help; it crashes
+   again every time.
+3. Pointing `source_code_path` at the `app/` subdirectory instead **stops the
+   crash** -- `app/app.yaml` and `app/main.py` are found and `uvicorn` boots. This
+   looks like success (`ApplicationState.RUNNING`, a live URL) and it's tempting to
+   stop here.
+4. **It is still broken.** The `app/app.yaml` picked up from Git is the committed
+   placeholder -- it declares no `QUEST_CATALOG`, `QUEST_SCHEMA`,
+   `QUEST_DATA_BACKEND`, `QUEST_SQL_WAREHOUSE_ID`, or `LAKEBASE_HOST`. No catalog or
+   schema was created, no warehouse was granted, and the scoring job was never
+   scheduled. `GET /api/health` will show `db_connected: false`; every page in the
+   app will be empty. Do not report this as a successful deployment even though the
+   app is `RUNNING` -- verification step 4 below exists specifically to catch this.
+
+### If Genie Code already created a git-linked app: recover, don't delete
+
+You do not need to delete the app and start over. `deploy.py` looks up the app **by
+name** and reuses whatever it finds (`w.apps.create` treats "already exists" as
+success, then deploys new source over it). So if a git-linked `databricks-quest` app
+already exists in this workspace:
+
+```
+python deploy.py --app-name databricks-quest --catalog <UNITY_CATALOG> --data-backend warehouse
+```
+
+This uploads the correct files (from your local clone or workspace folder, not
+Git), redeploys the *same* app resource with a real `app.yaml` (catalog, schema,
+backend, warehouse id all filled in), creates the catalog/schema if needed, grants
+the app's service principal, and schedules the scoring job -- turning the same
+crashed-then-hollow app into a real one, same URL, same app name, no orphaned
+resources left behind. Re-run the verification checklist below afterward; do not
+assume the earlier "RUNNING" state means it's now healthy -- check `/api/health`
+again, since the backend and env vars have changed underneath the running process
+and it needs the redeploy above to pick them up.
 
 ## Verify the deployment (do this -- don't stop at "the script finished")
 
@@ -104,6 +180,15 @@ has finished, and any check not yet green.
 - **App RUNNING but `/api/health` shows a backend error (3-4)** → check the app's
   env (`LAKEBASE_HOST`/`LAKEBASE_DB`) and that the app service principal has its
   grants; for the warehouse backend confirm the SQL warehouse exists and is usable.
+  If the app was ever created via "Deploy from Git" instead of `deploy.py` -- even
+  once, even if you've since fixed the crash -- this is almost certainly why. See
+  [If Genie Code already created a git-linked app](#if-genie-code-already-created-a-git-linked-app-recover-dont-delete)
+  above; re-running `deploy.py --app-name <that-app>` fixes it in place.
+- **App crashes right after "successful" deployment, or crashes again after every
+  redeploy/restart** → you deployed from Git pointing at the repo root or `app/`
+  subdirectory instead of running `deploy.py`. See the section above -- moving
+  `source_code_path` to `app/` stops the crash but does not fix the deployment; run
+  `deploy.py` against the same app name.
 - **App loads but shows zeros (6)** → the first scoring run hasn't finished. Find the
   job run under **Workflows**, wait for it, then reload.
 - **Anything deeper** → `docs/17_TROUBLESHOOTING.md` covers both backends symptom by

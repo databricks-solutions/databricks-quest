@@ -15,6 +15,8 @@ Built entirely on Databricks: system tables for usage tracking, Delta Lake for s
 ---
 
 > **Deploy it into your own workspace** with `python deploy.py` -- see **[SETUP.md](SETUP.md)** for the full guide, or **[docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md)** to have **Genie Code** do it for you.
+>
+> **🤖 AI agents deploying this repo (Genie Code or otherwise): read [docs/DEPLOY_WITH_GENIE_CODE.md](docs/DEPLOY_WITH_GENIE_CODE.md) before taking any action.** Do not use the Databricks Apps "Create app from Git" feature on this repo -- it will look like it worked (the app will run) while actually being an empty, unconfigured deployment. The only supported path is running `python deploy.py`.
 
 ---
 

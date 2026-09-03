@@ -214,6 +214,9 @@ MISSION_DEFINITIONS = [
     {"id": "mlflow_experimenter", "name": "MLflow Experimenter", "description": "Log 10+ MLflow models/runs to an experiment", "points": 150, "category": "AI / ML", "track": "Data Science", "award_type": "one_time", "icon": "flask-conical", "doc_url": f"{_DOCS}/mlflow/tracking/"},
     {"id": "model_registry_curator", "name": "Model Registry Curator", "description": "Register a model in the Unity Catalog Model Registry", "points": 200, "category": "AI / ML", "track": "Data Science", "award_type": "one_time", "icon": "brain", "doc_url": f"{_DOCS}/machine-learning/manage-model-lifecycle/"},
     {"id": "feature_store_builder", "name": "Feature Store Builder", "description": "Create a Feature Store table for ML feature engineering", "points": 200, "category": "AI / ML", "track": "Data Science", "award_type": "one_time", "icon": "layers", "doc_url": f"{_DOCS}/machine-learning/feature-store/uc/feature-tables-uc"},
+    # --- Agent Bricks (Knowledge Assistant / Multi-Agent Supervisor) ---
+    {"id": "knowledge_assistant_builder", "name": "Knowledge Assistant Builder", "description": "Build a Knowledge Assistant (Agent Bricks) for document Q&A", "points": 250, "category": "AI / ML", "track": "Data Science", "award_type": "one_time", "icon": "bot", "doc_url": f"{_DOCS}/agents/agent-bricks/knowledge-assistant"},
+    {"id": "multi_agent_supervisor", "name": "Multi-Agent Supervisor", "description": "Orchestrate specialized agents with a Supervisor Agent (Agent Bricks)", "points": 250, "category": "AI / ML", "track": "Data Science", "award_type": "one_time", "icon": "network", "doc_url": f"{_DOCS}/agents/agent-bricks/multi-agent-supervisor"},
     # --- Streaming ---
     {"id": "stream_starter", "name": "Stream Starter", "description": "Run a Structured Streaming job", "points": 250, "category": "Streaming", "track": "Data Engineering", "award_type": "one_time", "icon": "radio", "doc_url": f"{_DOCS}/structured-streaming/"},
     # --- Product-specific consumption (repeatable, monthly) — filed under the product's own category ---
@@ -263,7 +266,7 @@ BADGE_DEFINITIONS = [
     {"id": "dashboard_creator", "name": "Dashboard Creator", "description": "Create your first Databricks dashboard", "icon": "layout-dashboard",
      "criteria": {"kind": "missions_all", "missions": ["dashboard_designer"]}},
     {"id": "ml_practitioner_badge", "name": "ML Practitioner", "description": "Complete 2 of the core Data Science missions", "icon": "brain",
-     "criteria": {"kind": "missions_count", "need": 2, "missions": ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter", "model_registry_curator", "feature_store_builder"]}},
+     "criteria": {"kind": "missions_count", "need": 2, "missions": ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter", "model_registry_curator", "feature_store_builder", "knowledge_assistant_builder", "multi_agent_supervisor"]}},
     {"id": "unity_catalog_champion", "name": "Unity Catalog Champion", "description": "Complete 2 of the core Governance missions", "icon": "layers",
      "criteria": {"kind": "missions_count", "need": 2, "missions": ["uc_publisher", "catalog_architect", "external_location_pioneer", "lakehouse_federation_pioneer", "data_sharer"]}},
     {"id": "governance_guardian", "name": "Governance Guardian", "description": "Operate jobs or pipelines on 7 distinct days", "icon": "shield",

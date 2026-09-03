@@ -110,6 +110,8 @@ export const BADGE_CATALOG: BadgeDef[] = [
         'mlflow_experimenter',
         'model_registry_curator',
         'feature_store_builder',
+        'knowledge_assistant_builder',
+        'multi_agent_supervisor',
       ],
     },
   },

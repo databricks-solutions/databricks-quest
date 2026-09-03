@@ -21,7 +21,7 @@ Built entirely on Databricks: system tables for usage tracking, Delta Lake for s
 ## How It Works
 
 1. A **scoring pipeline** runs every 4 hours, reading Databricks system tables to detect what each user has done on the platform
-2. It scores 58 missions across 6 pillars — Getting Started, Business Users, Data Engineering, Data Science, App Dev (Lakebase), and Governance — plus continuous consumption points based on DBU spend
+2. It scores 60 missions across 6 pillars — Getting Started, Business Users, Data Engineering, Data Science, App Dev (Lakebase), and Governance — plus continuous consumption points based on DBU spend
 3. Scored data is synced to **Lakebase** (managed PostgreSQL) for sub-second reads
 4. A **React + FastAPI app** runs as a Databricks App, showing each user their dashboard, missions, leaderboard, and badges
 
@@ -75,7 +75,7 @@ Either way the deploy also selects or creates a serverless SQL warehouse (the sc
 ## What Users See
 
 - **Dashboard** -- Current level, points, streak, badges, and next missions to complete
-- **Missions** -- 58 missions across 6 pillars: **Getting Started**, **Business Users**, **Data Engineering**, **Data Science**, **App Dev (Lakebase)**, and **Governance** (the Missions page has a tab per pillar, plus an All Missions tab)
+- **Missions** -- 60 missions across 6 pillars: **Getting Started**, **Business Users**, **Data Engineering**, **Data Science**, **App Dev (Lakebase)**, and **Governance** (the Missions page has a tab per pillar, plus an All Missions tab)
 - **Leaderboard** -- Top 10 users ranked by points, resets every Saturday. Weekly swag prizes for the top 3.
 - **Admin** -- Pipeline health, user stats, mission completion charts, level distribution, and the **Data Backend** toggle (Lakebase / warehouse)
 
@@ -144,6 +144,8 @@ for its tile; the pillar only controls which tab it shows up under.
 | MLflow Experimenter | 150 | Log 10+ MLflow experiment runs |
 | Model Registry Curator 🆕 | 200 | Register a model in the Unity Catalog Model Registry |
 | Feature Store Builder 🆕 | 200 | Create a Feature Store table for ML feature engineering |
+| Knowledge Assistant Builder 🆕 | 250 | Build a Knowledge Assistant (Agent Bricks) for document Q&A |
+| Multi-Agent Supervisor 🆕 | 250 | Orchestrate specialized agents with a Supervisor Agent (Agent Bricks) |
 | ML Practitioner | 150 | Any Model Serving DBUs in a month (repeatable) |
 
 ### App Dev (Lakebase)

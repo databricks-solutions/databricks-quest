@@ -3,6 +3,7 @@ import {
   Award,
   BarChart3,
   Bell,
+  Bot,
   Brain,
   Briefcase,
   Calendar,
@@ -15,6 +16,7 @@ import {
   Globe,
   LayoutDashboard,
   Layers,
+  Network,
   Play,
   PlayCircle,
   Radio,
@@ -59,6 +61,8 @@ export const MISSION_ICONS: Record<string, LucideIcon> = {
   award: Award,
   shield: Shield,
   globe: Globe,
+  bot: Bot,
+  network: Network,
 }
 
 export function missionIcon(icon: string): LucideIcon {

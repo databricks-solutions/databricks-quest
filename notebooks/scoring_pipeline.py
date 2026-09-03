@@ -1586,6 +1586,80 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Mission: Knowledge Assistant Builder (250 pts)
+# MAGIC Build a Knowledge Assistant (Agent Bricks) for document Q&A — audited as
+# MAGIC service_name='knowledgeAssistant', action_name='create'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'knowledge_assistant_builder' AS mission_id,
+        'Knowledge Assistant Builder' AS mission_name,
+        250 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'knowledgeAssistant'
+        AND action_name = 'create'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Knowledge Assistant Builder")
+except Exception as e:
+    print(f"Mission skipped: Knowledge Assistant Builder ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Multi-Agent Supervisor (250 pts)
+# MAGIC Orchestrate specialized agents with a Supervisor Agent (Agent Bricks) —
+# MAGIC audited as service_name='supervisorAgent', action_name='create'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'multi_agent_supervisor' AS mission_id,
+        'Multi-Agent Supervisor' AS mission_name,
+        250 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'supervisorAgent'
+        AND action_name = 'create'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Multi-Agent Supervisor")
+except Exception as e:
+    print(f"Mission skipped: Multi-Agent Supervisor ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Mission: Vector Search Pioneer (200 pts)
 # MAGIC Create a Vector Search (Databricks AI Search) index.
 # MAGIC Audited as service_name='vectorSearch', action_name='createVectorIndex'.
@@ -2744,7 +2818,7 @@ MISSION_BADGES = [
     ("dashboard_creator", "Dashboard Creator", "layout-dashboard",
      ["dashboard_designer"], 1),
     ("ml_practitioner_badge", "ML Practitioner", "brain",
-     ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter", "model_registry_curator", "feature_store_builder"], 2),
+     ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter", "model_registry_curator", "feature_store_builder", "knowledge_assistant_builder", "multi_agent_supervisor"], 2),
     ("unity_catalog_champion", "Unity Catalog Champion", "layers",
      ["uc_publisher", "catalog_architect", "external_location_pioneer", "lakehouse_federation_pioneer", "data_sharer"], 2),
     ("governance_guardian", "Governance Guardian", "shield",

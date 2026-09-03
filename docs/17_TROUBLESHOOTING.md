@@ -12,10 +12,10 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
 
 ## Deployment
 
-### `deploy.sh` fails at authentication
+### Deploy fails at authentication
 - Confirm the Databricks CLI is installed and `databricks auth describe` resolves
   a profile. Re-run `databricks auth login --host <workspace-url>` if needed.
-- The script is non-interactive-friendly; pass `--profile <name>` to pick a
+- `deploy.py` is non-interactive-friendly; pass `--profile <name>` to pick a
   specific profile.
 
 ### No SQL warehouse found / wrong warehouse
@@ -56,9 +56,8 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
 ## Event Mode (GameDay)
 
 ### GameDay endpoints return 404
-- Event Mode is **off**. This is the default. Enable with
-  `./deploy.sh --event-mode` (or `QUEST_EVENT_MODE=on`), or deploy with
-  `--role master|child` which implies it. Confirm via `/api/health` →
+- Event Mode is **off**. This is the default. Enable it by setting
+  `QUEST_EVENT_MODE=on` on the app. Confirm via `/api/health` →
   `federation.role` and the presence of GameDay routes.
 
 ### "Submit" is disabled in the quest runner
@@ -107,8 +106,8 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
 
 ### Child can't connect to the master Lakebase
 - The child needs `LAKEBASE_HOST` = master's shared Lakebase host and
-  `LAKEBASE_WRITER_TOKEN` (the shared event-writer credential), set via
-  `--master-lakebase-host` / `--master-lakebase-token` at deploy. `/api/health`
+  `LAKEBASE_WRITER_TOKEN` (the shared event-writer credential), set as app
+  environment variables. `/api/health`
   → `federation` + `lakebase` checks confirm connectivity.
 - The writer role (default `quest_event_writer`) has restricted grants
   (INSERT on facts, SELECT/INSERT on `quest_admins`). It deliberately cannot run
@@ -170,8 +169,8 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
   latest, redeploy, and confirm the job's schedule shows **Unpaused** in Workflows.
 
 ### `npm` / registry errors during build
-- Use `./deploy.sh --skip-build` to deploy the committed prebuilt frontend. No npm
-  or registry access is required — useful on locked-down or air-gapped machines.
+- `deploy.py` deploys the committed prebuilt frontend, so no npm or registry access
+  is required -- useful on locked-down or air-gapped machines.
 
 ### Terraform download / checksum-signature error
 - Symptom: `error downloading Terraform: unable to verify checksums signature:
@@ -190,7 +189,7 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
   (Lakebase or warehouse). No redeploy is needed — the setting is stored in the app's
   `app_settings` table and read on each request (short cache).
 - To make the warehouse backend available at all, deploy with
-  `./deploy.sh --data-backend warehouse`, which provisions **both** Lakebase and a
+  `python deploy.py --data-backend warehouse`, which provisions **both** Lakebase and a
   Small serverless SQL warehouse and grants the app access to both.
 
 ### Warehouse mode: first request is slow

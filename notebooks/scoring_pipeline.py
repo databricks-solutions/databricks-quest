@@ -2596,7 +2596,15 @@ SELECT
   COALESCE(m.mission_points, 0) + COALESCE(c.consumption_points, 0) AS total_points,
   COALESCE(m.missions_completed, 0) AS missions_completed
 FROM (
-  SELECT user_id, SUM(points_awarded) AS mission_points, COUNT(*) AS missions_completed
+  -- COUNT(DISTINCT mission_id), not COUNT(*): repeatable missions (daily_driver,
+  -- ml_practitioner, etc.) accumulate one row per period they're re-earned in, and
+  -- SUM(points_awarded) correctly adds every period's points to the lifetime total
+  -- -- but "missions completed" means distinct missions ever completed, matching
+  -- what /api/missions shows (each mission_id counted once regardless of repeat
+  -- count). COUNT(*) inflated this by 1 for every extra historical period a
+  -- repeatable mission had accumulated, which is why the Dashboard's mission
+  -- count could exceed the Missions page's count for a long-lived account.
+  SELECT user_id, SUM(points_awarded) AS mission_points, COUNT(DISTINCT mission_id) AS missions_completed
   FROM {tbl('mission_completions')}
   GROUP BY user_id
 ) m

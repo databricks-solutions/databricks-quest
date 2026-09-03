@@ -9,16 +9,36 @@ import { EmptyState, ErrorState, SkeletonCard } from './quest/States'
 
 type MissionsResponse = { missions: Mission[] }
 
+// Canonical mission-pillar tab order. "All Missions" is a frontend-only
+// meta-filter, not a pillar value a mission carries. Keep in sync with the
+// `track` values assigned in app/main.py's MISSION_DEFINITIONS.
+const PILLAR_ORDER = [
+  'Getting Started',
+  'Business Users',
+  'Data Engineering',
+  'Data Science',
+  'App Dev (Lakebase)',
+  'Governance',
+]
+
 export default function Missions({ onProfileRefresh }: { onProfileRefresh?: () => void }) {
   const { data, loading, loaded, error, reload } = useApi<MissionsResponse>('/api/missions')
   const [filter, setFilter] = useState<string>('all')
   const [selected, setSelected] = useState<Mission | null>(null)
 
   const missions = data?.missions ?? []
-  // Tabs are persona "tracks" (Business Users, Lakebase, ...), falling back to
-  // category when a mission has no track. Card colors still use category.
+  // Tabs are mission "pillars" (persona tracks), falling back to category when
+  // a mission has no track. Card colors still use category.
   const trackOf = (m: Mission) => m.track || m.category
-  const categories = useMemo(() => ['all', ...Array.from(new Set(missions.map(trackOf)))], [missions])
+  const categories = useMemo(() => {
+    const present = new Set(missions.map(trackOf))
+    // Fixed pillar order first (only pillars that actually have missions),
+    // then any stray/untagged category appended at the end so a mission can
+    // never silently disappear from the tab list if it's missing a track.
+    const ordered = PILLAR_ORDER.filter((p) => present.has(p))
+    const leftover = Array.from(present).filter((p) => !PILLAR_ORDER.includes(p))
+    return ['all', ...ordered, ...leftover]
+  }, [missions])
   const filtered = filter === 'all' ? missions : missions.filter((m) => trackOf(m) === filter)
   const completed = missions.filter((m) => m.status === 'completed').length
   const total = missions.length

@@ -43,7 +43,7 @@ The rest of this README describes **Adoption Mode**.
 ## How It Works
 
 1. A **scoring pipeline** runs every 4 hours, reading Databricks system tables to detect what each user has done on the platform
-2. It scores 30+ missions across Data Engineering, Analytics, AI/ML, and Engagement categories, plus continuous consumption points based on DBU spend
+2. It scores 58 missions across 6 pillars — Getting Started, Business Users, Data Engineering, Data Science, App Dev (Lakebase), and Governance — plus continuous consumption points based on DBU spend
 3. Scored data is synced to **Lakebase** (managed PostgreSQL) for sub-second reads
 4. A **React + FastAPI app** runs as a Databricks App, showing each user their dashboard, missions, leaderboard, and badges
 
@@ -103,25 +103,35 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 ## What Users See
 
 - **Dashboard** -- Current level, points, streak, badges, and next missions to complete
-- **Missions** -- 40+ missions across Data Engineering, Analytics, AI/ML, Streaming, Consumption, Engagement, plus **Business Users** and **Lakebase** tracks (the Missions page has a tab per track)
+- **Missions** -- 58 missions across 6 pillars: **Getting Started**, **Business Users**, **Data Engineering**, **Data Science**, **App Dev (Lakebase)**, and **Governance** (the Missions page has a tab per pillar, plus an All Missions tab)
 - **Leaderboard** -- Top 10 users ranked by points, resets every Saturday. Weekly swag prizes for the top 3.
 - **Admin** -- Pipeline health, user stats, mission completion charts, level distribution, and the **Data Backend** toggle (Lakebase / warehouse)
 
 ## Missions
 
-### Getting Started & Data Engineering
+The Missions page groups every mission into 6 pillars (plus an **All Missions**
+tab that shows everything). Each mission still carries its own accent color/category
+for its tile; the pillar only controls which tab it shows up under.
+
+### Getting Started
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | First Steps | 25 | Use any Databricks compute for the first time |
-| Job Creator | 100 | Create your first Lakeflow Job |
-| Pipeline Builder | 150 | Create your first Lakeflow Spark Declarative Pipeline |
-| Pipeline Runner | 200 | Run a pipeline successfully |
-| Scheduler | 150 | Set up a scheduled or CRON-triggered job |
-| Auto Loader Pioneer | 250 | Use Auto Loader in a pipeline |
-| Multi-Task Orchestrator | 200 | Create a workflow with 3+ tasks |
-| Liquid Clustering Adopter | 200 | Enable Liquid Clustering on a table |
+| Get Started: Data Engineering | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Machine Learning | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Generative AI | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: SQL Analytics & BI | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Data Warehousing | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Platform Administration | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Data Governance | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Lakebase | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: Lakehouse Architecture | 250 | Complete the free self-paced course (2 hrs) |
+| Get Started: AI Agents | 250 | Complete the free course (2 hrs) |
+| Databricks Learner | 500 | Complete 2+ Get Started courses |
+| Daily Driver | 400 | Active on 20+ days in a 30-day window (repeatable) |
+| Cross-Product Champion | 500 | Use 6+ distinct Databricks products in a month (repeatable) |
 
-### Analytics & Business Users
+### Business Users
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | Genie Creator | 200 | Create an AI/BI Genie space |
@@ -139,48 +149,53 @@ With `--data-backend warehouse`, the deploy provisions Lakebase **and** a Small,
 | Alert Creator | 150 | Create a SQL Alert with a schedule |
 | App Builder | 250 | Create and deploy a Databricks App |
 | Notebook Author | 75 | Create your first notebook |
+| SQL Analyst | 100 | 50+ SQL Warehouse DBUs in a month (repeatable) |
 
-### Lakebase
+### Data Engineering
 | Mission | Points | What To Do |
 |---------|--------|------------|
-| Lakebase Builder | 250 | Create a Lakebase database instance |
-| Lakebase Sync Builder | 250 | Sync a Unity Catalog table into Lakebase |
-| Lakebase Database Creator | 150 | Create a Lakebase database or registered catalog |
-| Lakebase Connector | 100 | Connect to Lakebase from an app or client |
+| Job Creator | 100 | Create your first Lakeflow Job |
+| Pipeline Builder | 150 | Create your first Lakeflow Spark Declarative Pipeline |
+| Pipeline Runner | 200 | Run a pipeline successfully |
+| Scheduler | 150 | Set up a scheduled or CRON-triggered job |
+| Auto Loader Pioneer | 250 | Use Auto Loader in a pipeline |
+| Multi-Task Orchestrator | 200 | Create a workflow with 3+ tasks |
+| Liquid Clustering Adopter | 200 | Enable Liquid Clustering on a table |
+| Stream Starter | 250 | Run a Structured Streaming job |
 
-### AI / ML
+### Data Science
 | Mission | Points | What To Do |
 |---------|--------|------------|
 | Model Deployer | 300 | Deploy a model to a serving endpoint |
 | AI Function Builder | 250 | Use ai_query() in a SQL statement |
 | Vector Search Pioneer | 200 | Create a Vector Search index |
 | MLflow Experimenter | 150 | Log 10+ MLflow experiment runs |
-
-### Streaming
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| Stream Starter | 250 | Run a Structured Streaming job for 24+ hours |
-
-### Consumption (DBU-based)
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| First 100 DBUs | 50 | Reach 100 lifetime DBUs |
-| 1K DBU Club | 200 | Reach 1,000 lifetime DBUs |
-| 10K DBU Club | 500 | Reach 10,000 lifetime DBUs |
-| 100K DBU Club | 1,000 | Reach 100,000 lifetime DBUs |
-| SQL Analyst | 100 | 50+ SQL Warehouse DBUs in a month (repeatable) |
-| Job Runner | 100 | 50+ Jobs Compute DBUs in a month (repeatable) |
+| Model Registry Curator 🆕 | 200 | Register a model in the Unity Catalog Model Registry |
+| Feature Store Builder 🆕 | 200 | Create a Feature Store table for ML feature engineering |
 | ML Practitioner | 150 | Any Model Serving DBUs in a month (repeatable) |
-| Pipeline Operator | 100 | 50+ DLT DBUs in a month (repeatable) |
+
+### App Dev (Lakebase)
+| Mission | Points | What To Do |
+|---------|--------|------------|
+| Lakebase Builder | 250 | Create a Lakebase database instance (Provisioned or Postgres/Autoscaling) |
+| Lakebase Sync Builder | 250 | Sync a Unity Catalog table into Lakebase |
+| Lakebase Database Creator | 150 | Create a Lakebase database or registered catalog |
+| Lakebase Connector | 100 | Connect to Lakebase from an app or client |
+| Lakebase Branch Master 🆕 | 200 | Create a branch in a Lakebase Postgres project |
+| Lakebase Role Architect 🆕 | 150 | Create a custom PostgreSQL role in Lakebase |
+| Lakebase Reverse ETL Pioneer 🆕 | 250 | Stream Lakebase changes back into Unity Catalog with Change Data Feed |
+
+### Governance
+| Mission | Points | What To Do |
+|---------|--------|------------|
+| Unity Catalog Publisher | 150 | Share a table across schemas |
+| Catalog Architect 🆕 | 150 | Create a Unity Catalog catalog |
+| External Location Pioneer 🆕 | 200 | Configure secure access to cloud storage with an external location |
+| Lakehouse Federation Pioneer 🆕 | 250 | Connect an external database system with Lakehouse Federation |
+| Data Sharer 🆕 | 200 | Share data with another organization using Delta Sharing |
+| Consistent Operator | 300 | Run jobs/pipelines on 7 days within 30 days (repeatable) |
 
 Plus **continuous consumption points**: 1 point per 10 DBUs consumed, scored weekly. This keeps the leaderboard dynamic and rewards sustained platform usage.
-
-### Engagement
-| Mission | Points | What To Do |
-|---------|--------|------------|
-| Consistent Operator | 300 | Run jobs/pipelines on 7 days within 30 days (repeatable) |
-| Daily Driver | 400 | Active on 20+ days in a 30-day window (repeatable) |
-| Cross-Product Champion | 500 | Use 6+ distinct Databricks products in a month (repeatable) |
 
 ## Levels
 

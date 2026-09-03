@@ -256,6 +256,7 @@ if _rep_n:
 RESCORE_ONETIME_MISSIONS = (
     "uc_publisher", "liquid_clustering", "auto_loader_pioneer",
     "mlflow_experimenter", "vector_search_pioneer", "stream_starter",
+    "lakebase_builder",
 )
 _ro_in = ", ".join(f"'{m}'" for m in RESCORE_ONETIME_MISSIONS)
 _ro_n = spark.sql(
@@ -775,6 +776,12 @@ print("Mission scored: AI Assistant")
 # MAGIC %md
 # MAGIC ### Mission: Lakebase Builder (250 pts)
 # MAGIC Create your first Lakebase (managed Postgres / OLTP) database instance.
+# MAGIC Covers BOTH Lakebase flavors: Provisioned (service_name='databaseInstances',
+# MAGIC action_name='createDatabaseInstance') and Postgres/Autoscaling
+# MAGIC (service_name='postgres', action_name='createProject'). Originally only
+# MAGIC detected Provisioned, which silently excluded Autoscaling-only users from
+# MAGIC the very first Lakebase mission — listed in RESCORE_ONETIME_MISSIONS below
+# MAGIC so already-deployed workspaces re-score under the corrected rule.
 
 # COMMAND ----------
 
@@ -791,8 +798,8 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
   FROM system.access.audit
-  WHERE service_name = 'databaseInstances'
-    AND action_name = 'createDatabaseInstance'
+  WHERE service_name IN ('databaseInstances', 'postgres')
+    AND action_name IN ('createDatabaseInstance', 'createProject')
     AND response.status_code = 200
     AND user_identity.email IS NOT NULL
     AND user_identity.email != ''
@@ -1149,6 +1156,122 @@ print("Mission scored: Lakebase Connector")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Mission: Lakebase Branch Master (200 pts)
+# MAGIC Create a branch in a Lakebase Postgres project — audited as
+# MAGIC service_name='postgres', action_name='createBranch'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'lakebase_branch_master' AS mission_id,
+        'Lakebase Branch Master' AS mission_name,
+        200 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'postgres'
+        AND action_name = 'createBranch'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Lakebase Branch Master")
+except Exception as e:
+    print(f"Mission skipped: Lakebase Branch Master ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Lakebase Role Architect (150 pts)
+# MAGIC Create a custom PostgreSQL role in Lakebase — audited as
+# MAGIC service_name='postgres', action_name='createRole'. Excludes the
+# MAGIC "quest-sp" role deploy.sh creates for the app's own service principal
+# MAGIC (see the `postgres create-role` call that grants Lakebase access), the
+# MAGIC same self-grant problem uc_publisher already guards against below.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'lakebase_role_architect' AS mission_id,
+        'Lakebase Role Architect' AS mission_name,
+        150 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'postgres'
+        AND action_name = 'createRole'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND COALESCE(request_params['role_id'], '') <> 'quest-sp'
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Lakebase Role Architect")
+except Exception as e:
+    print(f"Mission skipped: Lakebase Role Architect ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Lakebase Reverse ETL Pioneer (250 pts)
+# MAGIC Stream Lakebase Postgres changes back into Unity Catalog with a Change
+# MAGIC Data Feed config — audited as service_name='postgres',
+# MAGIC action_name='createCdfConfig'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'lakebase_cdf_pioneer' AS mission_id,
+        'Lakebase Reverse ETL Pioneer' AS mission_name,
+        250 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'postgres'
+        AND action_name = 'createCdfConfig'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Lakebase Reverse ETL Pioneer")
+except Exception as e:
+    print(f"Mission skipped: Lakebase Reverse ETL Pioneer ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Mission: Multi-Task Orchestrator (200 pts)
 # MAGIC Create a workflow with 3+ tasks.
 
@@ -1386,6 +1509,83 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Mission: Model Registry Curator (200 pts)
+# MAGIC Register a model in the Unity Catalog Model Registry — audited as
+# MAGIC service_name='unityCatalog', action_name='createRegisteredModel'.
+# MAGIC NOTE: the legacy Workspace Model Registry emits the SAME action_name
+# MAGIC under service_name='modelRegistry' — filtering on service_name='unityCatalog'
+# MAGIC is required to count only the modern, UC-governed registry.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'model_registry_curator' AS mission_id,
+        'Model Registry Curator' AS mission_name,
+        200 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'unityCatalog'
+        AND action_name = 'createRegisteredModel'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Model Registry Curator")
+except Exception as e:
+    print(f"Mission skipped: Model Registry Curator ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Feature Store Builder (200 pts)
+# MAGIC Create a Feature Store table for ML feature engineering — audited as
+# MAGIC service_name='featureStore', action_name='createFeatureTable'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'feature_store_builder' AS mission_id,
+        'Feature Store Builder' AS mission_name,
+        200 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'featureStore'
+        AND action_name = 'createFeatureTable'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Feature Store Builder")
+except Exception as e:
+    print(f"Mission skipped: Feature Store Builder ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### Mission: Vector Search Pioneer (200 pts)
 # MAGIC Create a Vector Search (Databricks AI Search) index.
 # MAGIC Audited as service_name='vectorSearch', action_name='createVectorIndex'.
@@ -1499,6 +1699,158 @@ try:
     print("Mission scored: Unity Catalog Publisher")
 except Exception as e:
     print(f"Mission skipped: Unity Catalog Publisher ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Catalog Architect (150 pts)
+# MAGIC Create a Unity Catalog catalog — audited as service_name='unityCatalog',
+# MAGIC action_name='createCatalog'. Excludes the scoring pipeline's OWN
+# MAGIC `CREATE CATALOG IF NOT EXISTS` bootstrap of the Quest catalog (Step 1
+# MAGIC above), the same self-grant problem uc_publisher guards against.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'catalog_architect' AS mission_id,
+        'Catalog Architect' AS mission_name,
+        150 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'unityCatalog'
+        AND action_name = 'createCatalog'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND COALESCE(request_params['name'], '') <> '{CATALOG}'
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Catalog Architect")
+except Exception as e:
+    print(f"Mission skipped: Catalog Architect ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: External Location Pioneer (200 pts)
+# MAGIC Configure secure access to cloud storage with an external location or
+# MAGIC storage credential — audited as service_name='unityCatalog',
+# MAGIC action_name IN ('createExternalLocation', 'createStorageCredential').
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'external_location_pioneer' AS mission_id,
+        'External Location Pioneer' AS mission_name,
+        200 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'unityCatalog'
+        AND action_name IN ('createExternalLocation', 'createStorageCredential')
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: External Location Pioneer")
+except Exception as e:
+    print(f"Mission skipped: External Location Pioneer ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Lakehouse Federation Pioneer (250 pts)
+# MAGIC Connect an external database system with Lakehouse Federation —
+# MAGIC audited as service_name='unityCatalog', action_name='createConnection'.
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'lakehouse_federation_pioneer' AS mission_id,
+        'Lakehouse Federation Pioneer' AS mission_name,
+        250 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'unityCatalog'
+        AND action_name = 'createConnection'
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Lakehouse Federation Pioneer")
+except Exception as e:
+    print(f"Mission skipped: Lakehouse Federation Pioneer ({e})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mission: Data Sharer (200 pts)
+# MAGIC Share data with another organization using Delta Sharing — audited as
+# MAGIC service_name='unityCatalog', action_name IN ('createShare', 'createRecipient').
+
+# COMMAND ----------
+
+try:
+    spark.sql(f"""
+    MERGE INTO {tbl('mission_completions')} AS target
+    USING (
+      SELECT
+        user_identity.email AS user_id,
+        'data_sharer' AS mission_id,
+        'Data Sharer' AS mission_name,
+        200 AS points_awarded,
+        MIN(event_time) AS completed_at,
+        CAST(MIN(event_time) AS DATE) AS period_start,
+        CAST(MIN(event_time) AS DATE) AS period_end,
+        CAST('{NOW}' AS TIMESTAMP) AS scored_at
+      FROM system.access.audit
+      WHERE service_name = 'unityCatalog'
+        AND action_name IN ('createShare', 'createRecipient')
+        AND response.status_code = 200
+        AND user_identity.email IS NOT NULL AND user_identity.email != ''
+        AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
+      GROUP BY user_identity.email
+    ) AS source
+    ON target.user_id = source.user_id AND target.mission_id = source.mission_id
+    WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("Mission scored: Data Sharer")
+except Exception as e:
+    print(f"Mission skipped: Data Sharer ({e})")
 
 # COMMAND ----------
 
@@ -2392,9 +2744,9 @@ MISSION_BADGES = [
     ("dashboard_creator", "Dashboard Creator", "layout-dashboard",
      ["dashboard_designer"], 1),
     ("ml_practitioner_badge", "ML Practitioner", "brain",
-     ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter"], 2),
+     ["model_deployer", "ai_function_builder", "vector_search_pioneer", "mlflow_experimenter", "model_registry_curator", "feature_store_builder"], 2),
     ("unity_catalog_champion", "Unity Catalog Champion", "layers",
-     ["uc_publisher"], 1),
+     ["uc_publisher", "catalog_architect", "external_location_pioneer", "lakehouse_federation_pioneer", "data_sharer"], 2),
     ("governance_guardian", "Governance Guardian", "shield",
      ["consistent_operator"], 1),
 ]

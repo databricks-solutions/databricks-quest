@@ -12,6 +12,7 @@ import {
   Database,
   FlaskConical,
   GitBranch,
+  Globe,
   LayoutDashboard,
   Layers,
   Play,
@@ -20,6 +21,7 @@ import {
   Rocket,
   Search,
   Share2,
+  Shield,
   Sparkles,
   Target,
   Trophy,
@@ -55,6 +57,8 @@ export const MISSION_ICONS: Record<string, LucideIcon> = {
   'calendar-check': CalendarCheck,
   calendar: Calendar,
   award: Award,
+  shield: Shield,
+  globe: Globe,
 }
 
 export function missionIcon(icon: string): LucideIcon {
@@ -73,8 +77,13 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
   Engagement: { color: '#F43F5E', tint: 'rgba(244,63,94,0.16)' },
   Governance: { color: '#38BDF8', tint: 'rgba(56,189,248,0.16)' },
   Lakebase: { color: '#10B981', tint: 'rgba(16,185,129,0.16)' },
-  // Persona tracks (used as Missions-page tabs)
+  // Persona tracks / mission pillars (used as Missions-page tabs — see
+  // PILLAR_ORDER in Missions.tsx for the canonical 6-pillar taxonomy).
   'Business Users': { color: '#00C2D7', tint: 'rgba(0,194,215,0.16)' },
+  // Same color as "AI / ML" — Data Science is that content's new pillar name.
+  'Data Science': { color: '#8B5CF6', tint: 'rgba(139,92,246,0.16)' },
+  // Same color as "Lakebase" — App Dev (Lakebase) is that content's new pillar name.
+  'App Dev (Lakebase)': { color: '#10B981', tint: 'rgba(16,185,129,0.16)' },
   Platform: { color: '#F5B72E', tint: 'rgba(245,183,46,0.16)' },
 }
 

@@ -64,6 +64,37 @@ def _pick_glyphs() -> dict:
 GLYPH = _pick_glyphs()
 
 
+# ── Workspace IDs parsing (shared with scoring notebook) ───────────────────────
+# Workspace IDs are positive integers with no leading zero; '0' is the audit
+# marker for account-level events, never a real workspace.
+_WORKSPACE_ID_RE = re.compile(r"^[1-9][0-9]{0,18}$")
+
+
+def normalize_workspace_ids(raw: Optional[str]) -> str:
+    """Canonical scoring scope: 'all', or the workspace IDs joined with ','.
+
+    Splits on commas and whitespace. 'all' (any case) on its own means the whole
+    account. Duplicates are dropped, first occurrence wins. Raises ValueError for
+    an empty value, 'all' mixed with IDs, or a token that isn't a workspace ID.
+    """
+    tokens = [t for t in re.split(r"[\s,]+", (raw or "").strip()) if t]
+    if not tokens:
+        raise ValueError("no workspace IDs given: pass comma-separated workspace IDs, or 'all'")
+    if len(tokens) == 1 and tokens[0].lower() == "all":
+        return "all"
+    ids = []
+    for tok in tokens:
+        if tok.lower() == "all":
+            raise ValueError("'all' can't be combined with workspace IDs")
+        if not _WORKSPACE_ID_RE.match(tok):
+            raise ValueError(
+                f"invalid workspace ID {tok!r}: expected the numeric workspace ID, e.g. 1234567890123456"
+            )
+        if tok not in ids:
+            ids.append(tok)
+    return ",".join(ids)
+
+
 # ── Logging helpers (staged output, mirrors install_lakemeter.py) ─────────────
 # flush=True throughout: stdout is block-buffered when piped or redirected, and a
 # five-minute deploy that prints nothing until it exits looks hung in CI logs.
@@ -105,6 +136,7 @@ class Config:
     lakebase_host: str = ""
     skip_scoring: bool = False
     non_interactive: bool = False
+    workspace_ids: Optional[str] = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,6 +201,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Never prompt; pick sensible defaults (for CI / customers).",
     )
+    p.add_argument(
+        "--workspace-ids",
+        default=None,
+        help=(
+            "Only score system-table activity from these workspace IDs "
+            "(comma-separated), or 'all' for the whole account. Omit to keep the "
+            "current setting (new deployments score the whole account)."
+        ),
+    )
     return p
 
 
@@ -188,6 +229,7 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         lakebase_host=args.lakebase_host,
         skip_scoring=args.skip_scoring,
         non_interactive=args.non_interactive,
+        workspace_ids=args.workspace_ids,
     )
 
 
@@ -210,6 +252,7 @@ def render_app_yaml(
     admins: str,
     lakebase_host: str = "",
     lakebase_db: str = "",
+    scoring_workspace_ids: str = "all",
 ) -> str:
     """Render ``app/app.yaml`` for the given backend.
 
@@ -217,7 +260,8 @@ def render_app_yaml(
     backend toggle persists to a Delta ``app_settings`` table via the warehouse,
     so it must keep working even when Lakebase is down -- see deploy.sh
     ``write_app_yaml``). ``QUEST_ADMIN_ALLOWLIST`` is emitted only when admins is
-    non-empty. ``LAKEBASE_HOST``/``LAKEBASE_DB`` are emitted ONLY for the
+    non-empty. ``QUEST_SCORING_WORKSPACE_IDS`` is emitted only when the scope is
+    not 'all'. ``LAKEBASE_HOST``/``LAKEBASE_DB`` are emitted ONLY for the
     ``lakebase`` backend and only when a host is known -- warehouse-backend
     deploys must never carry Lakebase env.
     """
@@ -237,6 +281,8 @@ def render_app_yaml(
         env.append({"name": "QUEST_SQL_WAREHOUSE_ID", "value": warehouse_id})
     if admins:
         env.append({"name": "QUEST_ADMIN_ALLOWLIST", "value": admins})
+    if scoring_workspace_ids != "all":
+        env.append({"name": "QUEST_SCORING_WORKSPACE_IDS", "value": scoring_workspace_ids})
 
     doc = {
         "command": ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
@@ -763,9 +809,71 @@ def job_name(app_name: str) -> str:
     return f"[Quest] Scoring Pipeline ({app_name})"
 
 
+def current_scoring_workspace_ids(w, app_name: str) -> Optional[str]:
+    """Fetch the current workspace_ids parameter from the scoring job, if it exists.
+
+    Returns None if the job is not found, if the job lacks the run_scoring task,
+    or if the task has no workspace_ids parameter. Every level in the SDK is
+    Optional, so None propagates at any level.
+    """
+    name = job_name(app_name)
+    existing = next((j for j in w.jobs.list(name=name)), None)
+    if existing is None:
+        return None
+    job = w.jobs.get(job_id=existing.job_id)
+    if job.settings is None or job.settings.tasks is None:
+        return None
+    for task in job.settings.tasks:
+        if task.task_key == "run_scoring":
+            if task.notebook_task is None or task.notebook_task.base_parameters is None:
+                return None
+            return task.notebook_task.base_parameters.get("workspace_ids")
+    return None
+
+
+def resolve_scoring_scope(w, app_name: str, flag: Optional[str]) -> Optional[str]:
+    """The scope this deploy writes to the scoring job.
+
+    ``flag`` is the already-normalized ``--workspace-ids`` value, or None when the
+    flag was omitted. Omitted keeps the job's current value, or 'all' for a new job
+    (or one made before this setting existed). Returns None, after logging why,
+    when the current value can't be read or isn't valid: falling back to 'all'
+    there could quietly widen a scoped deployment.
+    """
+    try:
+        current = current_scoring_workspace_ids(w, app_name)
+    except Exception as exc:  # noqa: BLE001
+        if flag is not None:
+            return flag  # an explicit value doesn't depend on the current one
+        log_err(
+            f"Couldn't read the current scoring scope from job '{job_name(app_name)}': "
+            f"{str(exc)[:160]}\n"
+            "    Pass --workspace-ids explicitly (workspace IDs, or 'all')."
+        )
+        return None
+    if current is not None:
+        try:
+            current = normalize_workspace_ids(current)
+        except ValueError:
+            if flag is None:
+                log_err(
+                    f"The scoring job's workspace_ids parameter is {current!r}, which isn't valid.\n"
+                    "    Pass --workspace-ids explicitly (workspace IDs, or 'all')."
+                )
+                return None
+            current = None  # replaced by the flag below
+    if flag is None:
+        if current is not None:
+            log_info(f"Keeping the current scoring scope: {current}")
+        return current or "all"
+    if current is not None and current != flag:
+        log_warn(f"Scoring scope changes from {current} to {flag}.")
+    return flag
+
+
 def scoring_task_graph(notebooks_dir: str, catalog: str, schema: str,
                        warehouse_id: str, app_name: str, data_backend: str,
-                       lakebase_host: str, lakebase_db: str) -> List[dict]:
+                       lakebase_host: str, lakebase_db: str, workspace_ids: str = "all") -> List[dict]:
     """Describe the four scoring tasks and their dependencies.
 
     Mirrors the DAB job in ``databricks.yml``. Order matters: the attestation
@@ -796,6 +904,7 @@ def scoring_task_graph(notebooks_dir: str, catalog: str, schema: str,
                 "quest_schema": schema,
                 "app_name": app_name,
                 "warehouse_id": warehouse_id,
+                "workspace_ids": workspace_ids,
             },
             "depends_on": ["roundtrip_attestations"],
         },
@@ -884,7 +993,131 @@ def trigger_scoring(w, job_id: int):
     return w.jobs.run_now(job_id=job_id)
 
 
-def create_scheduled_job(w, graph: List[dict], app_name: str):
+def _workspace_check_sql(ids: List[str], with_names: bool) -> str:
+    """One aggregate per table, joined per ID afterwards.
+
+    Joining raw billing rows to raw audit rows first would multiply them, so each
+    side is reduced to one row per workspace before the join.
+    """
+    in_list = ", ".join(f"'{i}'" for i in ids)
+    names_cte = (
+        ",\nnames AS (\n"
+        "  SELECT workspace_id, workspace_name, CAST(status AS STRING) AS status\n"
+        f"  FROM system.access.workspaces_latest WHERE workspace_id IN ({in_list})\n"
+        ")"
+        if with_names else ""
+    )
+    name_cols = "n.workspace_name, n.status" if with_names else "NULL, NULL"
+    name_join = "LEFT JOIN names n ON n.workspace_id = i.workspace_id\n" if with_names else ""
+    return f"""WITH ids AS (SELECT explode(array({in_list})) AS workspace_id),
+billing AS (
+  SELECT workspace_id, COUNT(DISTINCT usage_date) AS billing_days
+  FROM system.billing.usage
+  WHERE workspace_id IN ({in_list}) AND usage_date >= current_date() - 45
+  GROUP BY workspace_id
+),
+audit AS (
+  SELECT workspace_id, COUNT(*) AS audit_rows
+  FROM system.access.audit
+  WHERE workspace_id IN ({in_list}) AND event_date >= current_date() - 7
+  GROUP BY workspace_id
+){names_cte}
+SELECT i.workspace_id, {name_cols}, COALESCE(b.billing_days, 0), COALESCE(a.audit_rows, 0)
+FROM ids i
+{name_join}LEFT JOIN billing b ON b.workspace_id = i.workspace_id
+LEFT JOIN audit a ON a.workspace_id = i.workspace_id
+ORDER BY i.workspace_id"""
+
+
+def _run_check_statement(w, warehouse_id: str, statement: str,
+                         timeout_s: float, poll_s: float):
+    """Run one read and wait for it. Returns (state, response); state None = timed out.
+
+    The Statement Execution API waits at most 50s inline, so anything slower is
+    polled. A statement we stop waiting for is cancelled so it doesn't keep the
+    warehouse busy.
+    """
+    import time
+
+    resp = w.statement_execution.execute_statement(
+        statement=statement, warehouse_id=warehouse_id, wait_timeout="50s"
+    )
+    deadline = time.monotonic() + timeout_s
+    while _state_value(resp) in ("PENDING", "RUNNING"):
+        if time.monotonic() >= deadline:
+            try:
+                w.statement_execution.cancel_execution(statement_id=resp.statement_id)
+            except Exception:  # noqa: BLE001 -- best effort
+                pass
+            return None, resp
+        time.sleep(poll_s)
+        resp = w.statement_execution.get_statement(statement_id=resp.statement_id)
+    return _state_value(resp), resp
+
+
+def _report_workspace_check(ids: List[str], rows: list, with_names: bool) -> None:
+    """One line per ID. Statement results arrive as strings (or None), hence the int()."""
+    by_id = {r[0]: r for r in rows if r}
+    for ws_id in ids:
+        row = by_id.get(ws_id) or [ws_id, None, None, 0, 0]
+        name, status = row[1], row[2]
+        billing_days = int(row[3] or 0)
+        audit_rows = int(row[4] or 0)
+        label = f"{ws_id} ({name})" if name else ws_id
+        if with_names and not name:
+            log_warn(f"Workspace {ws_id}: not found in this account (a typo, or a cancelled workspace).")
+            continue
+        if status and status.upper() != "RUNNING":
+            log_warn(f"Workspace {label}: status is {status}.")
+        if billing_days == 0:
+            log_warn(f"Workspace {label}: no billing activity in the last 45 days.")
+        elif audit_rows == 0:
+            log_warn(
+                f"Workspace {label}: billing activity but no audit rows here, so it's "
+                "probably in another cloud region: only billing-based missions can score it."
+            )
+        else:
+            log_ok(f"Workspace {label}: active (billing on {billing_days} of the last 45 days)")
+
+
+def check_scoring_workspaces(w, warehouse_id: str, workspace_ids: str,
+                             timeout_s: float = 120.0, poll_s: float = 3.0) -> None:
+    """Warn about scoped workspace IDs that probably won't score. Never fails the deploy.
+
+    Per ID: name and status from ``system.access.workspaces_latest`` (Public
+    Preview, so a second attempt runs without it), days with billing rows in the
+    last 45 days (``system.billing.usage`` is global), and audit rows from the last
+    7 days (``system.access.audit`` is regional for workspace-level events, so
+    billing without audit usually means another cloud region).
+    """
+    if workspace_ids == "all":
+        return
+    ids = workspace_ids.split(",")
+    last_error = ""
+    for with_names in (True, False):
+        try:
+            state, resp = _run_check_statement(
+                w, warehouse_id, _workspace_check_sql(ids, with_names), timeout_s, poll_s
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)[:160]
+            continue
+        if state is None:
+            log_warn(f"Workspace ID check timed out after {int(timeout_s)}s; continuing without it.")
+            return
+        if state == "SUCCEEDED":
+            result = getattr(resp, "result", None)
+            _report_workspace_check(ids, getattr(result, "data_array", None) or [], with_names)
+            return
+        err = getattr(getattr(resp, "status", None), "error", None)
+        last_error = (getattr(err, "message", None) or str(state))[:160]
+    log_warn(
+        "Couldn't check the workspace IDs (needs SELECT on system.access and "
+        f"system.billing): {last_error}"
+    )
+
+
+def create_scheduled_job(w, graph: List[dict], app_name: str, workspace_ids: str = "all"):
     """Create or update the every-4-hours scoring job.
 
     Looks the job up by name first and resets the existing one instead of
@@ -921,10 +1154,10 @@ def create_scheduled_job(w, graph: List[dict], app_name: str):
     existing = next((j for j in w.jobs.list(name=name)), None)
     if existing is not None:
         if _is_bundle_managed(w, existing.job_id):
-            log_warn(
-                f"Job '{name}' is managed by a Databricks Asset Bundle "
-                "(deploy.sh); leaving it untouched."
-            )
+            msg = f"Job '{name}' is managed by a Databricks Asset Bundle (deploy.sh); leaving it untouched."
+            if workspace_ids != "all":
+                msg += " The scoring scope was not applied to it."
+            log_warn(msg)
             log_info("Use deploy.sh for it, or pass a different --app-name.")
             return existing.job_id
         # update, not reset: reset replaces the whole settings object and would
@@ -1211,6 +1444,14 @@ def run(cfg: Config) -> int:
     app_dir = repo_root / "app"
     notebooks_dir = repo_root / "notebooks"
 
+    # Validate --workspace-ids early (fail fast, clean error, non-zero exit).
+    if cfg.workspace_ids is not None:
+        try:
+            cfg.workspace_ids = normalize_workspace_ids(cfg.workspace_ids)
+        except ValueError as exc:
+            log_err(f"Invalid --workspace-ids: {exc}")
+            return 1
+
     # ── Step 1: prerequisites + client ────────────────────────────────────────
     log_step(1, TOTAL_STEPS, "Checking prerequisites and connecting")
     w = get_client(cfg.profile, cfg.host)
@@ -1222,6 +1463,13 @@ def run(cfg: Config) -> int:
     log_ok(f"Authenticated as {user_email}")
     cfg.admins = _resolve_admins(cfg, user_email)
 
+    # Scoring scope, resolved before anything is created so a scope we can't read
+    # stops the deploy cleanly.
+    scope = resolve_scoring_scope(w, cfg.app_name, cfg.workspace_ids)
+    if scope is None:
+        return 1
+    cfg.workspace_ids = scope
+
     # ── Step 3: SQL warehouse (always wired, every backend) ───────────────────
     log_step(3, TOTAL_STEPS, "Selecting a SQL warehouse")
     warehouse_id = resolve_warehouse(
@@ -1229,6 +1477,9 @@ def run(cfg: Config) -> int:
     )
     cfg.warehouse_id = warehouse_id
     log_ok(f"Using warehouse {warehouse_id}")
+
+    if cfg.workspace_ids != "all":
+        check_scoring_workspaces(w, warehouse_id, cfg.workspace_ids)
 
     # ── Step 4: Unity Catalog setup ───────────────────────────────────────────
     log_step(4, TOTAL_STEPS, "Setting up Unity Catalog")
@@ -1290,6 +1541,7 @@ def run(cfg: Config) -> int:
         admins=cfg.admins,
         lakebase_host=lakebase_host if cfg.data_backend == "lakebase" else "",
         lakebase_db=cfg.lakebase_db,
+        scoring_workspace_ids=cfg.workspace_ids or "all",
     )
     # Upload the rendered config straight to the workspace copy rather than
     # writing it into the repo: no dirty working tree, no second full upload, and
@@ -1332,10 +1584,11 @@ def run(cfg: Config) -> int:
         _notebooks_dir(user_email, cfg.app_name),
         cfg.catalog, cfg.schema, warehouse_id, cfg.app_name,
         cfg.data_backend, lakebase_host or "", cfg.lakebase_db,
+        workspace_ids=cfg.workspace_ids or "all",
     )
     job_id = None
     try:
-        job_id = create_scheduled_job(w, graph, cfg.app_name)
+        job_id = create_scheduled_job(w, graph, cfg.app_name, workspace_ids=cfg.workspace_ids or "all")
         log_ok(f"Scoring job {job_id} scheduled (every 4 hours, UTC)")
     except Exception as exc:  # noqa: BLE001
         log_warn(f"Scheduled job: {str(exc)[:160]}")
@@ -1355,6 +1608,14 @@ def run(cfg: Config) -> int:
     url = getattr(app, "url", "") or ""
     state = getattr(getattr(app, "app_status", None), "state", "")
     log_ok(f"App: {cfg.app_name}  state={state}")
+
+    scope_ids = [] if cfg.workspace_ids == "all" else cfg.workspace_ids.split(",")
+    if scope_ids:
+        noun = "workspace" if len(scope_ids) == 1 else "workspaces"
+        log_ok(f"Scoring scope: {len(scope_ids)} {noun} ({', '.join(scope_ids)})")
+    else:
+        log_ok("Scoring scope: whole account")
+
     if url:
         print(f"\n  {BOLD}Open the app:{NC} {CYAN}{url}{NC}\n")
     return 0

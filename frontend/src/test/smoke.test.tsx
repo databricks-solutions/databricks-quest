@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { EmptyState, ErrorState } from '../components/quest/States'
 import { useApi } from '../lib/api'
+import { scopeLabel } from '../components/AdminPanel'
 
 describe('quest states render', () => {
   it('renders an empty state with title + message', () => {
@@ -80,5 +81,24 @@ describe('useApi data layer', () => {
       await Promise.resolve()
     })
     expect(fetchMock.mock.calls.length).toBeGreaterThan(initialCalls)
+  })
+})
+
+describe('scoring scope label (Insights, read-only)', () => {
+  it('says whole account when no workspace IDs are set', () => {
+    expect(scopeLabel(undefined).text).toBe('Scope: whole account')
+    expect(scopeLabel([]).text).toBe('Scope: whole account')
+  })
+
+  it('lists the IDs with a correct plural', () => {
+    expect(scopeLabel(['111']).text).toBe('Scope: 1 workspace (111) · set at deploy time')
+    expect(scopeLabel(['111', '222']).text).toBe('Scope: 2 workspaces (111, 222) · set at deploy time')
+    expect(scopeLabel(['111', '222']).title).toBeUndefined()
+  })
+
+  it('shows the first four IDs and puts the full list in the title', () => {
+    const s = scopeLabel(['1', '2', '3', '4', '5', '6'])
+    expect(s.text).toBe('Scope: 6 workspaces (1, 2, 3, 4, +2 more) · set at deploy time')
+    expect(s.title).toBe('All workspace IDs: 1, 2, 3, 4, 5, 6')
   })
 })

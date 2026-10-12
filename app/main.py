@@ -345,6 +345,26 @@ QUEST_ADMIN_ALLOWLIST = [
     e.strip().lower() for e in os.getenv("QUEST_ADMIN_ALLOWLIST", "").split(",") if e.strip()
 ]
 
+
+def get_scoring_workspace_ids() -> List[str]:
+    """Parse QUEST_SCORING_WORKSPACE_IDS env var at call time.
+
+    Splits on commas and whitespace, strips each token, and keeps only
+    all-digit tokens (representing workspace IDs). Returns a list of strings.
+    Empty list means the whole account.
+    """
+    raw = os.getenv("QUEST_SCORING_WORKSPACE_IDS", "").strip()
+    if not raw:
+        return []
+    # Split on commas and whitespace, filter empty tokens, keep only digit tokens (not "0")
+    tokens = []
+    for token in raw.replace(",", " ").split():
+        token = token.strip()
+        if token and token.isdigit() and token != "0":
+            tokens.append(token)
+    return tokens
+
+
 admins_repo = AdminsRepository()
 
 # Small TTL cache over the DB admin set so we don't query Lakebase on every
@@ -1219,6 +1239,7 @@ async def get_admin_stats(user: str = Depends(get_user_email)):
 
 @app.get("/api/admin/pipeline-status")
 async def get_pipeline_status(user: str = Depends(get_user_email)):
+    scoring_ids = get_scoring_workspace_ids()
     try:
         latest = execute_query("SELECT MAX(updated_at) AS last_run FROM user_profile_snapshot")
         last_run = latest[0]["last_run"] if latest and latest[0].get("last_run") else None
@@ -1227,9 +1248,15 @@ async def get_pipeline_status(user: str = Depends(get_user_email)):
             "status": "healthy" if last_run else "not_initialized",
             "last_run": last_run,
             "total_events_scored": total[0]["cnt"] if total else 0,
+            "scoring_workspace_ids": scoring_ids,
         }
     except Exception:
-        return {"status": "not_initialized", "last_run": None, "total_events_scored": 0}
+        return {
+            "status": "not_initialized",
+            "last_run": None,
+            "total_events_scored": 0,
+            "scoring_workspace_ids": scoring_ids,
+        }
 
 
 # ---------------------------------------------------------------------------

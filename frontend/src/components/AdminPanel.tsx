@@ -32,6 +32,18 @@ const BAR_COLORS = ['#FF5F1F', '#00C2D7', '#8B5CF6', '#22C55E', '#F43F5E', '#3B8
 
 const TOOLTIP_STYLE = { background: '#0D1320', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, color: '#F1F5F9' }
 
+// Read-only: the scoring scope is set with `deploy.py --workspace-ids` and can't be
+// changed in the app. Long lists show the first four IDs; the full list is in the title.
+export function scopeLabel(ids?: string[]): { text: string; title?: string } {
+  if (!ids || ids.length === 0) return { text: 'Scope: whole account' }
+  const noun = ids.length === 1 ? 'workspace' : 'workspaces'
+  const shown = ids.length > 4 ? `${ids.slice(0, 4).join(', ')}, +${ids.length - 4} more` : ids.join(', ')
+  return {
+    text: `Scope: ${ids.length} ${noun} (${shown}) · set at deploy time`,
+    title: ids.length > 4 ? `All workspace IDs: ${ids.join(', ')}` : undefined,
+  }
+}
+
 // The "Insights" page (nav label; internally still routed/named "admin") is
 // open to every user -- pipeline health, KPIs, and the completion/level
 // charts below are read-only platform telemetry, and the backing endpoints
@@ -49,6 +61,8 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
   const p = pipeline.data
   const isHealthy = p?.status === 'healthy'
   const lastRefresh = s?.last_refresh ? new Date(s.last_refresh).toLocaleString() : 'Never'
+  // Only once pipeline-status has loaded, so a scoped deployment never flashes "whole account".
+  const scope = p ? scopeLabel(p.scoring_workspace_ids) : null
 
   const missionChartData = useMemo(
     () => (s?.top_missions ?? []).slice(0, 8).map((m) => ({ name: m.mission_name || m.mission_id, completions: m.completions })),
@@ -89,6 +103,7 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
               Last refresh: {lastRefresh}
               {p && p.total_events_scored > 0 && <span className="ml-3">Events scored: {p.total_events_scored.toLocaleString()}</span>}
             </p>
+            {scope && <p className="mt-1 text-sm text-slate-400" title={scope.title}>{scope.text}</p>}
           </div>
           <Clock className="h-5 w-5 text-slate-500" />
         </div>

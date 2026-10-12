@@ -141,6 +141,10 @@ When adding or changing persistent data, update all relevant locations:
 - Avoid static fake data in production paths; mock data is acceptable only behind clear fallback/demo boundaries.
 - Add loading, error, and empty states for all new views.
 
+### Scoring notebook
+
+When adding or updating missions that read system tables, use the notebook's scoped-source constants (`SYS_BILLING_USAGE`, `SYS_AUDIT`, `SYS_ASSISTANT_EVENTS`, `SYS_QUERY_HISTORY`, `SYS_JOBS`, `SYS_JOB_TASKS`, `SYS_JOB_RUN_TIMELINE`, `SYS_PIPELINES`, `SYS_PIPELINE_UPDATE_TIMELINE`) instead of reading `system.<schema>.<table>` directly. This allows the scoring scope feature (filtering by workspace) to work correctly. Tests in `tests/test_scoring_scope.py` verify this.
+
 ### Validation engine
 
 Validators should support these patterns:

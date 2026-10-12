@@ -82,6 +82,7 @@ export interface PipelineStatus {
   status: string
   last_run: string | null
   total_events_scored: number
+  scoring_workspace_ids?: string[]
 }
 
 export interface AdminEntry {

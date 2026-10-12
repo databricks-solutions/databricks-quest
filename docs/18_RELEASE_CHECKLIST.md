@@ -29,6 +29,11 @@ covers Adoption Mode. Check every box.
       404, the Event UI is hidden, and GameDay migrations are skipped.
 - [ ] `/api/profile`, `/api/missions`, `/api/leaderboard`, `/api/admin/*` respond.
 - [ ] Scoring pipeline runs and Delta→Lakebase sync populates the leaderboard.
+- [ ] Unscoped deploy (no `--workspace-ids`) scores the whole account as before, and
+      Insights shows `Scope: whole account`.
+- [ ] Scoped deploy (`--workspace-ids <id>`) shows the scope on Insights, a redeploy
+      without the flag keeps it, and `tests/test_scoring_scope.py` passes (every
+      system-table read goes through the scoped `SYS_*` sources).
 
 ## 4. Security & governance
 

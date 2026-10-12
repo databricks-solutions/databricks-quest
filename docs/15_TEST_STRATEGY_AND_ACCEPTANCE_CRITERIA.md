@@ -24,6 +24,9 @@ Test:
 - event lifecycle transitions
 - role checks
 - SQL safety checks
+- scoring workspace scope: every system-table read goes through the scoped sources,
+  the notebook and `deploy.py` parse `workspace_ids` the same way, and unscoped SQL is
+  unchanged (`tests/test_scoring_scope.py`, `tests/test_deploy_py.py`)
 
 ### 3. Integration tests
 

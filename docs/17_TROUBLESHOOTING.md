@@ -142,6 +142,37 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
   endpoints (`/api/profile`, `/api/missions`, `/api/leaderboard`) should still
   work independently.
 
+### Scoring job fails with "This deployment scores only workspaces ..."
+- The deployment is scoped (`deploy.py --workspace-ids`), and this run arrived with no
+  `workspace_ids` parameter. The run stops instead of scoring the whole account,
+  because one-time milestones are permanent and one account-wide run would add other
+  workspaces' awards for good.
+- Hand run (SETUP.md Option A/B): pass the same `workspace_ids`, or `all` if you
+  really want the whole account.
+- Scheduled job: the parameter was dropped, for example because the job was recreated
+  by an older `deploy.py`. Re-run `deploy.py` with `--workspace-ids <ids>` (or
+  `--workspace-ids all`); without the flag it stops and tells you the last scope.
+  A bundle-managed job (`databricks.yml`) takes its scope from the bundle's
+  `workspace_ids` variable instead.
+
+### Leaderboard emptier than expected after scoping
+- Check the workspace list `deploy.py` printed at deploy time. Per ID it shows the
+  name, status and recent activity, and flags:
+  - **not found in this account:** a typo, or a cancelled workspace.
+  - **no billing activity in 45 days:** the workspace isn't in use.
+  - **probably in another cloud region:** billing rows but no audit rows from here.
+    See the next entry.
+- The scoring job's output also prints the scope it used.
+
+### Scoped workspace earns only billing and Unity Catalog missions
+- The workspace is probably in a different cloud region from the Quest workspace. Only
+  `system.billing.usage` and account-level audit events (which include Unity
+  Catalog) are global; query history, workspace-level audit events, Lakeflow and
+  assistant events only hold workspaces in the same region as the workspace that
+  queries them. That's true with or without a scope, so removing the scope doesn't
+  bring that activity in. To score it, run a Quest deployment in a workspace in that
+  region.
+
 ### App loads but shows no data ("Not Initialized" / empty admin)
 - The scoring job hasn't produced the scored Delta tables yet, or the sync to the
   active backend hasn't run. Open **Admin** and check pipeline health, then trigger

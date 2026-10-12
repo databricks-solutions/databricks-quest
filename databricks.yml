@@ -22,6 +22,9 @@ variables:
   quest_data_backend:
     description: Adoption data backend — "lakebase" (default) or "warehouse"
     default: lakebase
+  workspace_ids:
+    description: Score only these workspace IDs, or "all". Pass several as BUNDLE_VAR_workspace_ids=111,222 or --var "workspace_ids=111 222" (--var splits on commas). Empty means not set (whole account unless the last run was scoped, in which case the run stops)
+    default: ""
 
 resources:
   apps:
@@ -42,6 +45,8 @@ resources:
             value: ${var.lakebase_host}
           - name: LAKEBASE_DB
             value: ${var.lakebase_db}
+          - name: QUEST_SCORING_WORKSPACE_IDS
+            value: ${var.workspace_ids}
 
   jobs:
     quest_scoring_pipeline:
@@ -86,6 +91,7 @@ resources:
               quest_schema: ${var.quest_schema}
               app_name: databricks-quest
               warehouse_id: ${var.warehouse_id}
+              workspace_ids: ${var.workspace_ids}
             source: WORKSPACE
           environment_key: default
         # Copy the freshly-scored Delta tables into Lakebase so the app refreshes

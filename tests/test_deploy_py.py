@@ -11,6 +11,8 @@ import pathlib
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 spec = importlib.util.spec_from_file_location(
     "deploy", pathlib.Path(__file__).resolve().parent.parent / "deploy.py"
 )
@@ -801,3 +803,519 @@ def test_main_dispatches_steps(monkeypatch):
     assert rc == 0
     assert captured["cfg"].catalog == "quest_data"
     assert captured["cfg"].data_backend == "warehouse"
+
+
+# ── Workspace ID scope: parsing, validation, resolution ──────────────────────
+def test_normalize_workspace_ids_all_lowercase():
+    assert deploy.normalize_workspace_ids("all") == "all"
+
+
+def test_normalize_workspace_ids_all_uppercase():
+    assert deploy.normalize_workspace_ids("ALL") == "all"
+
+
+def test_normalize_workspace_ids_all_mixed_case():
+    assert deploy.normalize_workspace_ids("All") == "all"
+
+
+def test_normalize_workspace_ids_single_id():
+    assert deploy.normalize_workspace_ids("1234567890123456") == "1234567890123456"
+
+
+def test_normalize_workspace_ids_multiple_ids():
+    assert deploy.normalize_workspace_ids("111,222,333") == "111,222,333"
+
+
+def test_normalize_workspace_ids_whitespace_separated():
+    assert deploy.normalize_workspace_ids("111 222 333") == "111,222,333"
+
+
+def test_normalize_workspace_ids_mixed_whitespace_and_commas():
+    assert deploy.normalize_workspace_ids(" 111 , 222 \n 333 ") == "111,222,333"
+
+
+def test_normalize_workspace_ids_drops_duplicates():
+    assert deploy.normalize_workspace_ids("111,111,222") == "111,222"
+
+
+def test_normalize_workspace_ids_keeps_first_occurrence():
+    assert deploy.normalize_workspace_ids("111,222,111,222") == "111,222"
+
+
+def test_normalize_workspace_ids_rejects_empty():
+    import pytest
+    with pytest.raises(ValueError, match="no workspace IDs given"):
+        deploy.normalize_workspace_ids("")
+
+
+def test_normalize_workspace_ids_rejects_whitespace_only():
+    import pytest
+    with pytest.raises(ValueError, match="no workspace IDs given"):
+        deploy.normalize_workspace_ids("   ")
+
+
+def test_normalize_workspace_ids_rejects_all_mixed_with_ids():
+    import pytest
+    with pytest.raises(ValueError, match="can't be combined"):
+        deploy.normalize_workspace_ids("all,111")
+
+
+def test_normalize_workspace_ids_rejects_ids_mixed_with_all():
+    import pytest
+    with pytest.raises(ValueError, match="can't be combined"):
+        deploy.normalize_workspace_ids("111,all")
+
+
+def test_normalize_workspace_ids_rejects_zero():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("0")
+
+
+def test_normalize_workspace_ids_rejects_leading_zero():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("0123")
+
+
+def test_normalize_workspace_ids_rejects_non_digit():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("12a")
+
+
+def test_normalize_workspace_ids_rejects_negative():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("-5")
+
+
+def test_normalize_workspace_ids_rejects_decimal():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("1.5")
+
+
+def test_normalize_workspace_ids_rejects_20_digits():
+    import pytest
+    with pytest.raises(ValueError, match="invalid workspace ID"):
+        deploy.normalize_workspace_ids("12345678901234567890")
+
+
+def test_normalize_workspace_ids_accepts_19_digits():
+    # 19 digits is the max: BIGINT's 2^63-1 is 19 digits long
+    result = deploy.normalize_workspace_ids("1234567890123456789")
+    assert result == "1234567890123456789"
+
+
+def test_parser_workspace_ids_default():
+    args = deploy.build_parser().parse_args(["--catalog", "quest_data"])
+    assert args.workspace_ids is None
+
+
+def test_parser_workspace_ids_value():
+    args = deploy.build_parser().parse_args(
+        ["--catalog", "quest_data", "--workspace-ids", "111,222"]
+    )
+    assert args.workspace_ids == "111,222"
+
+
+def test_config_workspace_ids_from_args():
+    args = deploy.build_parser().parse_args(
+        ["--catalog", "quest_data", "--workspace-ids", "111"]
+    )
+    cfg = deploy._config_from_args(args)
+    assert cfg.workspace_ids == "111"
+
+
+def test_current_scoring_workspace_ids_not_found():
+    w = MagicMock()
+    w.jobs.list.return_value = iter([])
+    result = deploy.current_scoring_workspace_ids(w, "databricks-quest")
+    assert result is None
+
+
+def test_current_scoring_workspace_ids_found():
+    w = MagicMock()
+    existing = MagicMock()
+    existing.job_id = 4242
+    w.jobs.list.return_value = iter([existing])
+
+    job = MagicMock()
+    task = MagicMock()
+    task.task_key = "run_scoring"
+    task.notebook_task.base_parameters = {"workspace_ids": "111,222"}
+    job.settings.tasks = [task]
+    w.jobs.get.return_value = job
+
+    result = deploy.current_scoring_workspace_ids(w, "databricks-quest")
+    assert result == "111,222"
+
+
+def test_current_scoring_workspace_ids_task_not_found():
+    w = MagicMock()
+    existing = MagicMock()
+    existing.job_id = 4242
+    w.jobs.list.return_value = iter([existing])
+
+    job = MagicMock()
+    task = MagicMock()
+    task.task_key = "other_task"
+    job.settings.tasks = [task]
+    w.jobs.get.return_value = job
+
+    result = deploy.current_scoring_workspace_ids(w, "databricks-quest")
+    assert result is None
+
+
+def test_current_scoring_workspace_ids_none_at_notebook_task():
+    w = MagicMock()
+    existing = MagicMock()
+    existing.job_id = 4242
+    w.jobs.list.return_value = iter([existing])
+
+    job = MagicMock()
+    task = MagicMock()
+    task.task_key = "run_scoring"
+    task.notebook_task = None
+    job.settings.tasks = [task]
+    w.jobs.get.return_value = job
+
+    result = deploy.current_scoring_workspace_ids(w, "databricks-quest")
+    assert result is None
+
+
+def test_current_scoring_workspace_ids_none_at_base_parameters():
+    w = MagicMock()
+    existing = MagicMock()
+    existing.job_id = 4242
+    w.jobs.list.return_value = iter([existing])
+
+    job = MagicMock()
+    task = MagicMock()
+    task.task_key = "run_scoring"
+    task.notebook_task.base_parameters = None
+    job.settings.tasks = [task]
+    w.jobs.get.return_value = job
+
+    result = deploy.current_scoring_workspace_ids(w, "databricks-quest")
+    assert result is None
+
+
+def test_scoring_task_graph_default_workspace_ids():
+    graph = deploy.scoring_task_graph(
+        "/Workspace/Users/me/databricks-quest/notebooks",
+        "quest_data", "quest", "wh1", "databricks-quest",
+        "lakebase", "ep-x.database.cloud.databricks.com", "quest_db",
+    )
+    by_key = {t["task_key"]: t for t in graph}
+    assert by_key["run_scoring"]["params"]["workspace_ids"] == "all"
+
+
+def test_scoring_task_graph_explicit_workspace_ids():
+    graph = deploy.scoring_task_graph(
+        "/Workspace/Users/me/databricks-quest/notebooks",
+        "quest_data", "quest", "wh1", "databricks-quest",
+        "lakebase", "ep-x.database.cloud.databricks.com", "quest_db",
+        workspace_ids="111,222",
+    )
+    by_key = {t["task_key"]: t for t in graph}
+    assert by_key["run_scoring"]["params"]["workspace_ids"] == "111,222"
+
+
+def test_scoring_task_graph_other_tasks_unchanged():
+    graph = deploy.scoring_task_graph(
+        "/Workspace/Users/me/databricks-quest/notebooks",
+        "quest_data", "quest", "wh1", "databricks-quest",
+        "lakebase", "ep-x.database.cloud.databricks.com", "quest_db",
+        workspace_ids="111,222",
+    )
+    by_key = {t["task_key"]: t for t in graph}
+    # workspace_ids should not be in other tasks
+    assert "workspace_ids" not in by_key["roundtrip_attestations"]["params"]
+    assert "workspace_ids" not in by_key["sync_to_lakebase"]["params"]
+    assert "workspace_ids" not in by_key["warm_warehouse"]["params"]
+
+
+def test_app_yaml_scoring_workspace_ids_not_emitted_when_all():
+    y = deploy.render_app_yaml(
+        backend="warehouse",
+        catalog="quest_data",
+        schema="quest",
+        warehouse_id="wh123",
+        admins="",
+        scoring_workspace_ids="all",
+    )
+    assert "QUEST_SCORING_WORKSPACE_IDS" not in y
+
+
+def test_app_yaml_scoring_workspace_ids_emitted_when_scoped():
+    y = deploy.render_app_yaml(
+        backend="warehouse",
+        catalog="quest_data",
+        schema="quest",
+        warehouse_id="wh123",
+        admins="",
+        scoring_workspace_ids="111,222",
+    )
+    assert "QUEST_SCORING_WORKSPACE_IDS" in y
+    assert "111,222" in y
+
+
+def test_check_scoring_workspaces_all_never_checks():
+    w = MagicMock()
+    deploy.check_scoring_workspaces(w, "wh1", "all")
+    w.statement_execution.execute_statement.assert_not_called()
+
+
+def test_check_scoring_workspaces_statement_raises_logs_warning(capsys, monkeypatch):
+    w = MagicMock()
+    w.statement_execution.execute_statement.side_effect = Exception("permission denied")
+    deploy.check_scoring_workspaces(w, "wh1", "111")
+    out = capsys.readouterr().out
+    assert "couldn't check" in out.lower()
+
+
+def test_check_scoring_workspaces_statement_timeout_logs_warning(capsys):
+    w = MagicMock()
+    resp = MagicMock()
+    resp.statement_id = "stmt-123"
+    resp.status.state.value = "RUNNING"  # never reaches a terminal state
+    w.statement_execution.execute_statement.return_value = resp
+    w.statement_execution.get_statement.return_value = resp
+
+    deploy.check_scoring_workspaces(w, "wh1", "111", timeout_s=0.0, poll_s=0.0)
+    out = capsys.readouterr().out
+    assert "timed out" in out.lower()
+    # A statement we stop waiting for is cancelled, not left running on the warehouse.
+    w.statement_execution.cancel_execution.assert_called_once_with(statement_id="stmt-123")
+
+
+def _succeeded(rows):
+    resp = MagicMock()
+    resp.status.state.value = "SUCCEEDED"
+    resp.result.data_array = rows
+    return resp
+
+
+def test_check_scoring_workspaces_waits_inline_at_most_50s():
+    # The Statement Execution API rejects an inline wait above 50s.
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _succeeded([])
+    deploy.check_scoring_workspaces(w, "wh1", "111")
+    kwargs = w.statement_execution.execute_statement.call_args.kwargs
+    assert kwargs["wait_timeout"] == "50s"
+    assert kwargs["warehouse_id"] == "wh1"
+
+
+def test_check_scoring_workspaces_aggregates_each_table_before_joining():
+    sql = deploy._workspace_check_sql(["111", "222"], with_names=True)
+    # billing and audit are each reduced to one row per workspace, so the join
+    # never multiplies raw billing rows by raw audit rows.
+    assert sql.count("GROUP BY workspace_id") == 2
+    assert "workspace_id IN ('111', '222')" in sql
+    # "the last 45 days" / "the last 7 days", today included (not 46 / 8 calendar days).
+    assert "usage_date > current_date() - 45" in sql
+    assert "event_date > current_date() - 7" in sql
+    assert "system.access.workspaces_latest" in sql
+    assert "system.access.workspaces_latest" not in deploy._workspace_check_sql(["111"], with_names=False)
+
+
+def test_check_scoring_workspaces_reports_each_id(capsys):
+    # Statement results arrive as strings; status values are RUNNING/PROVISIONING/...
+    rows = [
+        ["111", "Finance Prod", "RUNNING", "30", "5400"],   # healthy
+        ["222", "Finance Dev", "RUNNING", "0", "0"],        # no billing
+        ["333", "Sydney", "RUNNING", "12", "0"],            # billing but no audit here
+        ["444", None, None, "0", "0"],                      # not in workspaces_latest
+        ["555", "New one", "PROVISIONING", "3", "10"],      # not running yet
+    ]
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _succeeded(rows)
+    deploy.check_scoring_workspaces(w, "wh1", "111,222,333,444,555")
+    out = capsys.readouterr().out
+    assert "111 (Finance Prod): active (billing on 30 of the last 45 days)" in out
+    assert "222 (Finance Dev): no billing activity in the last 45 days" in out
+    assert "333 (Sydney): billing activity but no audit rows here" in out
+    assert "probably in another cloud region" in out
+    assert "only billing and Unity Catalog missions can score it" in out
+    assert "444: not found in this account" in out
+    assert "555 (New one): status is PROVISIONING" in out
+    assert "111 (Finance Prod): status" not in out
+
+
+def test_check_scoring_workspaces_falls_back_without_names(capsys):
+    # system.access.workspaces_latest is Public Preview; if it fails, retry without it.
+    failed = MagicMock()
+    failed.status.state.value = "FAILED"
+    failed.status.error.message = "TABLE_OR_VIEW_NOT_FOUND: workspaces_latest"
+    w = MagicMock()
+    w.statement_execution.execute_statement.side_effect = [
+        failed,
+        _succeeded([["111", None, None, "4", "0"]]),
+    ]
+    deploy.check_scoring_workspaces(w, "wh1", "111")
+    out = capsys.readouterr().out
+    second_sql = w.statement_execution.execute_statement.call_args_list[1].kwargs["statement"]
+    assert "workspaces_latest" not in second_sql
+    assert "not found in this account" not in out  # unknown without the names table
+    assert "probably in another cloud region" in out
+
+
+def test_check_scoring_workspaces_both_attempts_failing_warns(capsys):
+    w = MagicMock()
+    w.statement_execution.execute_statement.side_effect = Exception("PERMISSION_DENIED: system.billing")
+    deploy.check_scoring_workspaces(w, "wh1", "111")
+    out = capsys.readouterr().out
+    assert "couldn't check the workspace ids" in out.lower()
+    assert "PERMISSION_DENIED" in out
+    assert w.statement_execution.execute_statement.call_count == 2
+
+
+# ── resolve_scoring_scope: flag vs the scoring job's current value ────────────
+def _fake_job(value=None, bundle=False, has_param=True):
+    task = MagicMock()
+    task.task_key = "run_scoring"
+    task.notebook_task.base_parameters = {"workspace_ids": value} if has_param else {"quest_catalog": "c"}
+    job = MagicMock()
+    job.settings.tasks = [task]
+    job.settings.deployment = MagicMock(kind="BUNDLE") if bundle else None
+    return job
+
+
+def _with_job(monkeypatch, job=None, raises=None):
+    def fake(w, app_name):
+        if raises:
+            raise raises
+        return job
+    monkeypatch.setattr(deploy, "_find_scoring_job", fake)
+
+
+def test_scope_flag_wins_and_warns_on_change(monkeypatch, capsys):
+    _with_job(monkeypatch, _fake_job("111"))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", "222")
+    assert (d.scope, d.check_last_run, d.bundle_managed) == ("222", False, False)
+    assert "changes from 111 to 222" in capsys.readouterr().out
+
+
+def test_scope_omitted_keeps_current(monkeypatch, capsys):
+    _with_job(monkeypatch, _fake_job("111,222"))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+    assert (d.scope, d.check_last_run) == ("111,222", False)
+    assert "Keeping the current scoring scope" in capsys.readouterr().out
+
+
+def test_scope_omitted_with_no_usable_value_checks_the_last_run(monkeypatch):
+    # No job yet, a job from before this setting (no parameter), or an empty value
+    # (the bundle default) all mean "all", but only after confirming the last run
+    # wasn't scoped (see test_run_* below).
+    for job in (None, _fake_job(has_param=False), _fake_job(""), _fake_job("  ")):
+        _with_job(monkeypatch, job)
+        d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+        assert (d.scope, d.check_last_run) == ("all", True)
+
+
+def test_scope_omitted_and_unreadable_stops_the_deploy(monkeypatch, capsys):
+    _with_job(monkeypatch, raises=Exception("PERMISSION_DENIED"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", None) is None
+    assert "Pass --workspace-ids explicitly" in capsys.readouterr().out
+
+
+def test_scope_omitted_and_malformed_stops_the_deploy(monkeypatch, capsys):
+    _with_job(monkeypatch, _fake_job("abc"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", None) is None
+    assert "isn't valid" in capsys.readouterr().out
+
+
+def test_scope_flag_given_ignores_unreadable_or_malformed_current(monkeypatch):
+    _with_job(monkeypatch, raises=Exception("boom"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "all").scope == "all"
+    _with_job(monkeypatch, _fake_job("abc"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "111").scope == "111"
+
+
+def test_scope_on_a_bundle_job_is_left_to_the_bundle(monkeypatch, capsys):
+    # deploy.py never edits a bundle-managed job, so it must not claim a new scope.
+    _with_job(monkeypatch, _fake_job("", bundle=True))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "111") is None
+    assert "managed by a Databricks Asset Bundle" in capsys.readouterr().out
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+    assert (d.scope, d.check_last_run, d.bundle_managed) == ("all", False, True)
+    _with_job(monkeypatch, _fake_job("111", bundle=True))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", "111")  # same value: fine
+    assert (d.scope, d.bundle_managed) == ("111", True)
+
+
+# ── last_scoring_scope: the record the scoring notebook writes ────────────────
+def _stmt(state, rows=None, error=None):
+    resp = MagicMock()
+    resp.status.state.value = state
+    resp.status.error.message = error
+    resp.result.data_array = rows
+    return resp
+
+
+def test_last_scoring_scope_reads_the_record():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [["111,222"]])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") == "111,222"
+    sql = w.statement_execution.execute_statement.call_args.kwargs["statement"]
+    assert "`cat`.`sch`.app_settings" in sql and "scoring_scope_last_run" in sql
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [[None]])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") == ""
+
+
+def test_last_scoring_scope_none_when_there_is_no_record_yet():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") is None
+    w.statement_execution.execute_statement.return_value = _stmt(
+        "FAILED", error="[TABLE_OR_VIEW_NOT_FOUND] The table or view `cat`.`sch`.`app_settings` cannot be found."
+    )
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") is None
+
+
+def test_last_scoring_scope_raises_when_unreadable():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("FAILED", error="PERMISSION_DENIED: no SELECT")
+    with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
+        deploy.last_scoring_scope(w, "wh", "cat", "sch")
+
+
+# ── run(): the last-run check before writing 'all' ────────────────────────────
+class _ReachedUpload(Exception):
+    """Raised by the stubbed upload step: the deploy got past the scope checks."""
+
+
+def _stub_run_until_upload(monkeypatch, last_scope):
+    w = MagicMock()
+    w.current_user.me.return_value.user_name = "me@x.com"
+    monkeypatch.setattr(deploy, "get_client", lambda *a, **k: w)
+    monkeypatch.setattr(deploy, "resolve_scoring_scope",
+                        lambda *a, **k: deploy.ScopeDecision("all", check_last_run=True))
+    monkeypatch.setattr(deploy, "resolve_warehouse", lambda *a, **k: "wh")
+    monkeypatch.setattr(deploy, "resolve_catalog", lambda *a, **k: "cat")
+    monkeypatch.setattr(deploy, "setup_unity_catalog", lambda *a, **k: None)
+    monkeypatch.setattr(deploy, "last_scoring_scope", lambda *a, **k: last_scope)
+
+    def reached(*a, **k):
+        raise _ReachedUpload()
+    monkeypatch.setattr(deploy, "upload_dir", reached)
+    return deploy.Config(catalog="cat", non_interactive=True)
+
+
+def test_run_stops_instead_of_widening_a_scoped_deployment(monkeypatch, capsys):
+    # The job lost its workspace_ids (e.g. recreated by an older deploy.py), but the
+    # last scoring run was scoped: writing 'all' would widen it for good.
+    cfg = _stub_run_until_upload(monkeypatch, last_scope="111,222")
+    assert deploy.run(cfg) == 1
+    out = capsys.readouterr().out
+    assert "its last run scored only workspaces 111,222" in out
+    assert "--workspace-ids 111,222" in out
+
+
+def test_run_continues_when_the_last_run_was_unscoped_or_never_ran(monkeypatch):
+    for last in ("", None):
+        cfg = _stub_run_until_upload(monkeypatch, last_scope=last)
+        with pytest.raises(_ReachedUpload):
+            deploy.run(cfg)

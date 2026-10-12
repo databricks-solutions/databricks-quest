@@ -66,6 +66,7 @@ Either way the deploy also selects or creates a serverless SQL warehouse (the sc
 |------|--------------|
 | `--catalog <name>` | Unity Catalog for Quest's scored tables (asked interactively if omitted). |
 | `--data-backend warehouse` | Use the SQL warehouse backend only -- no Lakebase to provision or sync. |
+| `--workspace-ids <ids>` | Score only these workspace IDs (comma-separated, e.g. `--workspace-ids 1234567890123456,6543210987654321`); `all` for the whole account. Omit to keep the current setting. |
 | `--skip-scoring` | Deploy without running the scoring job now (it still runs on schedule). |
 | `--profile <name>` | Use a specific CLI auth profile (recommended in restricted setups). |
 | `--non-interactive` / `-y` | Never prompt (CI / unattended); requires `--catalog`. |

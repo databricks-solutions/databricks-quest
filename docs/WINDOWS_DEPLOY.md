@@ -134,6 +134,7 @@ warehouse and the catalog.
 | `--data-backend {lakebase,warehouse}` | Deploy-time default backend | `lakebase` |
 | `--warehouse "NAME"` | Use this existing warehouse (matched by name) | auto |
 | `--warehouse-id ID` | Use this warehouse ID (skips lookup) | auto |
+| `--workspace-ids IDS` | Score only these workspace IDs (comma separated); `all` for the whole account | keep current (new deploys: whole account) |
 | `--admins a@b.com,c@d.com` | Seed Admin-page admins | deploying user |
 | `--profile NAME` | Databricks CLI profile | env/default |
 | `--host URL` | Workspace URL, when no profile or env auth is set | env/default |

@@ -130,6 +130,26 @@ operator can see *which* subsystem is degraded rather than a binary up/down:
 `status` is `degraded` only when Lakebase is down; an unset SQL warehouse is
 informational (dry-run still works), not degraded.
 
+### `/api/admin/pipeline-status` (Adoption Mode)
+
+Open to every signed-in user. Reports whether scoring has produced data, and the
+deploy-time scoring scope.
+
+```json
+{
+  "status": "healthy",
+  "last_run": "2026-10-12T04:00:00Z",
+  "total_events_scored": 41250,
+  "scoring_workspace_ids": ["1234567890123456", "6543210987654321"]
+}
+```
+
+`status` is `healthy` once `user_profile_snapshot` has an `updated_at`, otherwise
+`not_initialized`. `scoring_workspace_ids` comes from `QUEST_SCORING_WORKSPACE_IDS`,
+which `deploy.py --workspace-ids` writes into `app.yaml`; an empty array means the
+whole account. It is read-only: there is no endpoint that changes the scope, and the
+Insights page only displays it.
+
 ### Request correlation & error envelope (PR10)
 
 Every response carries an `X-Request-ID` header (an inbound one is honoured,

@@ -81,6 +81,25 @@ Notes:
 
 Full reference, including every flag and the Windows prerequisites: **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
+### Scoring scope (optional)
+
+By default, the scoring pipeline reads system-table activity from your entire account. To score only selected workspaces instead, pass `--workspace-ids` at deploy time with their workspace IDs (the number after `adb-` in an Azure URL, or the `o=` value in a workspace URL):
+
+```
+python deploy.py --workspace-ids 1234567890123456,6543210987654321 ...
+```
+
+`--workspace-ids all` goes back to the whole account. Leaving the flag off keeps whatever the deployment already uses (a new deployment scores the whole account). The scope can only be set at deploy time; the app shows it read-only on the Insights page. `deploy.py` also checks each ID and warns about unknown IDs, inactive workspaces, and workspaces that are probably in another region.
+
+What it changes: every system-table read in the scoring notebook only sees those workspaces, so the leaderboard, profiles and badges follow. Get Started training points are unaffected. When you set or change the scope, points and badges already earned stay; weekly DBU points, repeatable missions and streaks are recomputed every run, so they follow the new scope from the next run.
+
+For manual runs (Options A and B, and the scheduled job in Step 9), the examples leave `workspace_ids` empty, which means "not set": the run scores the whole account, unless the last run was scoped, in which case it stops instead of widening the scope. Put your workspace IDs there to scope a manual setup. Use `all` only when you mean to switch a scoped deployment back to the whole account, because `all` skips that safety check.
+
+Key notes:
+
+- **Regions:** `system.billing.usage` and account-level audit events are global. `query.history`, `assistant_events`, the Lakeflow tables, and workspace-level audit events only contain workspaces in the same cloud region as the Quest workspace. So a workspace in another region can only earn billing-based and Unity Catalog missions (Unity Catalog events are logged at account level).
+- **Unity Catalog:** Unity Catalog audit events are logged at account level (`workspace_id` `0`) with the originating workspace in `request_params.workspace_id`. The scope filter matches either, so the Unity Catalog missions keep working. A small share of those events carry no originating workspace and don't count while a scope is set.
+
 ---
 
 ## Manual Deploy
@@ -167,25 +186,6 @@ databricks workspace import-dir notebooks /Workspace/Users/YOUR_EMAIL/databricks
 
 Replace `YOUR_EMAIL` with your Databricks email address.
 
-### Scoring scope (optional)
-
-By default, the scoring pipeline reads system-table activity from your entire account. To score only selected workspaces instead, pass `--workspace-ids` at deploy time with their workspace IDs (the number after `adb-` in an Azure URL, or the `o=` value in a workspace URL):
-
-```
-python deploy.py --workspace-ids 1234567890123456,6543210987654321 ...
-```
-
-`--workspace-ids all` goes back to the whole account. Leaving the flag off keeps whatever the deployment already uses (a new deployment scores the whole account). The scope can only be set at deploy time; the app shows it read-only on the Insights page. `deploy.py` also checks each ID and warns about unknown IDs, inactive workspaces, and workspaces that are probably in another region.
-
-What it changes: every system-table read in the scoring notebook only sees those workspaces, so the leaderboard, profiles and badges follow. Get Started training points are unaffected. When you set or change the scope, points and badges already earned stay; weekly DBU points, repeatable missions and streaks are recomputed every run, so they follow the new scope from the next run.
-
-For manual runs (Options A and B, and the scheduled job in Step 9), set the `workspace_ids` parameter to the same list, or `all`. On a scoped deployment, a run without `workspace_ids` fails rather than scoring the whole account.
-
-Key notes:
-
-- **Regions:** `system.billing.usage` and account-level audit events are global. `query.history`, `assistant_events`, the Lakeflow tables, and workspace-level audit events only contain workspaces in the same cloud region as the Quest workspace. So a workspace in another region can only earn billing-based and Unity Catalog missions (Unity Catalog events are logged at account level).
-- **Unity Catalog:** Unity Catalog audit events are logged at account level (`workspace_id` `0`) with the originating workspace in `request_params.workspace_id`. The scope filter matches either, so the Unity Catalog missions keep working. A small share of those events carry no originating workspace and don't count while a scope is set.
-
 ### Step 8: Run the scoring pipeline
 
 The scoring pipeline reads system tables and populates the Quest Delta tables. You need to run it once to create initial data.
@@ -200,7 +200,7 @@ Option A -- Run via the Databricks UI:
    - `quest_schema`: `quest`
    - `app_name`: `databricks-quest`
    - `warehouse_id`: your warehouse ID
-   - `workspace_ids`: `all` (or a comma-separated list of workspace IDs to scope it)
+   - `workspace_ids`: leave empty for the whole account, or a comma-separated list of workspace IDs to scope it
 5. Click "Run All"
 
 Option B -- Run via CLI:
@@ -217,7 +217,7 @@ databricks jobs submit --json '{
         "quest_schema": "quest",
         "app_name": "databricks-quest",
         "warehouse_id": "YOUR_WAREHOUSE_ID",
-        "workspace_ids": "all"
+        "workspace_ids": ""
       },
       "source": "WORKSPACE"
     },
@@ -269,7 +269,7 @@ databricks jobs create --json '{
           "quest_schema": "quest",
           "app_name": "databricks-quest",
           "warehouse_id": "YOUR_WAREHOUSE_ID",
-          "workspace_ids": "all"
+          "workspace_ids": ""
         },
         "source": "WORKSPACE"
       },
@@ -436,6 +436,13 @@ env:
     value: "ep-xxxxx.database.us-east-1.cloud.databricks.com"
   - name: LAKEBASE_DB
     value: "quest_db"
+```
+
+If you scoped scoring to some workspaces (the `workspace_ids` parameter in Step 9), also add them so the Insights page can show the scope:
+
+```yaml
+  - name: QUEST_SCORING_WORKSPACE_IDS
+    value: "1234567890123456,6543210987654321"
 ```
 
 ### Step 13: Deploy the app

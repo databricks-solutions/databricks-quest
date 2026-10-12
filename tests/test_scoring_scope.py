@@ -195,3 +195,18 @@ def test_widening_guard_runs_before_the_first_system_table_read():
     assert guard_lines, "the widening guard (app_settings key 'scoring_scope_last_run') is missing"
     assert min(guard_lines) < first_read, "the widening guard must run before the first system-table read"
     assert "This deployment scores only workspaces" in NOTEBOOK.read_text()
+
+
+def test_widening_guard_stops_only_an_unparameterized_run_after_a_scoped_one():
+    guard = _notebook_ns("check_scope_not_widened")["check_scope_not_widened"]
+    try:
+        guard(False, "111,222")
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "This deployment scores only workspaces 111,222" in msg
+        assert "workspace_ids=111,222" in msg and "workspace_ids=all" in msg
+    else:
+        raise AssertionError("an unparameterized run after a scoped run must fail")
+    guard(False, "")       # last run scored the whole account
+    guard(False, None)     # no record yet (first run, or before this setting)
+    guard(True, "111,222")  # an explicit workspace_ids (IDs or 'all') always proceeds

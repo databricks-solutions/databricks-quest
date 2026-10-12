@@ -150,8 +150,10 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
 - Hand run (SETUP.md Option A/B): pass the same `workspace_ids`, or `all` if you
   really want the whole account.
 - Scheduled job: the parameter was dropped, for example because the job was recreated
-  by an older `deploy.py` or from `databricks.yml`. Re-run `deploy.py` with
-  `--workspace-ids <ids>` (or `--workspace-ids all`).
+  by an older `deploy.py`. Re-run `deploy.py` with `--workspace-ids <ids>` (or
+  `--workspace-ids all`); without the flag it stops and tells you the last scope.
+  A bundle-managed job (`databricks.yml`) takes its scope from the bundle's
+  `workspace_ids` variable instead.
 
 ### Leaderboard emptier than expected after scoping
 - Check the workspace list `deploy.py` printed at deploy time. Per ID it shows the

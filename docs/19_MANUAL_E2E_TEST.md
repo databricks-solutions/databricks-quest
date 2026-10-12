@@ -29,8 +29,8 @@ Python installed, and a running SQL warehouse for Event-Mode resource/SQL steps.
    - *Expect:* the deploy prints a line per ID (name, activity, or a warning for an
      unknown ID, an idle workspace, or one that's probably in another region) and
      `Scoring scope: N workspace(s)`. Insights shows `Scope: ... · set at deploy time`.
-     After the scoring run, only users with activity in those workspaces appear on
-     the leaderboard. Redeploying without the flag prints `Keeping the current
+     After the scoring run, new points come only from activity in those workspaces
+     (on an existing deployment, awards already earned stay). Redeploying without the flag prints `Keeping the current
      scoring scope`, and a hand run of the notebook without `workspace_ids` fails
      with `This deployment scores only workspaces ...`.
 

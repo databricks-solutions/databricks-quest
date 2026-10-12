@@ -809,66 +809,124 @@ def job_name(app_name: str) -> str:
     return f"[Quest] Scoring Pipeline ({app_name})"
 
 
-def current_scoring_workspace_ids(w, app_name: str) -> Optional[str]:
-    """Fetch the current workspace_ids parameter from the scoring job, if it exists.
+def _find_scoring_job(w, app_name: str):
+    """The scoring job (full settings, via ``jobs.get``), or None if there isn't one.
 
-    Returns None if the job is not found, if the job lacks the run_scoring task,
-    or if the task has no workspace_ids parameter. Every level in the SDK is
-    Optional, so None propagates at any level.
+    ``jobs.list`` omits the task list unless ``expand_tasks`` is set, so the match
+    is re-read with ``jobs.get``.
     """
-    name = job_name(app_name)
-    existing = next((j for j in w.jobs.list(name=name)), None)
-    if existing is None:
-        return None
-    job = w.jobs.get(job_id=existing.job_id)
-    if job.settings is None or job.settings.tasks is None:
-        return None
-    for task in job.settings.tasks:
+    existing = next((j for j in w.jobs.list(name=job_name(app_name))), None)
+    return None if existing is None else w.jobs.get(job_id=existing.job_id)
+
+
+def _run_scoring_workspace_ids(job) -> Optional[str]:
+    """The run_scoring task's ``workspace_ids`` parameter, or None at any missing level."""
+    settings = getattr(job, "settings", None)
+    for task in (getattr(settings, "tasks", None) or []):
         if task.task_key == "run_scoring":
-            if task.notebook_task is None or task.notebook_task.base_parameters is None:
-                return None
-            return task.notebook_task.base_parameters.get("workspace_ids")
+            params = getattr(task.notebook_task, "base_parameters", None) if task.notebook_task else None
+            return params.get("workspace_ids") if params else None
     return None
 
 
-def resolve_scoring_scope(w, app_name: str, flag: Optional[str]) -> Optional[str]:
-    """The scope this deploy writes to the scoring job.
+def _job_is_bundle(job) -> bool:
+    deployment = getattr(getattr(job, "settings", None), "deployment", None)
+    kind = getattr(deployment, "kind", None)
+    return str(getattr(kind, "value", kind) or "").upper() == "BUNDLE"
+
+
+def current_scoring_workspace_ids(w, app_name: str) -> Optional[str]:
+    """The scoring job's current ``workspace_ids`` parameter, or None if there is
+    no job, no run_scoring task, or no such parameter."""
+    job = _find_scoring_job(w, app_name)
+    return None if job is None else _run_scoring_workspace_ids(job)
+
+
+@dataclass
+class ScopeDecision:
+    """What this deploy does with the scoring scope.
+
+    ``scope`` is 'all' or the comma-joined IDs. ``check_last_run`` means the job
+    had no usable value (no job yet, a job from before this setting, or an empty
+    parameter), so before writing 'all' the deploy confirms the last scoring run
+    wasn't scoped. ``bundle_managed`` means deploy.py leaves the job alone.
+    """
+    scope: str
+    check_last_run: bool = False
+    bundle_managed: bool = False
+
+
+def resolve_scoring_scope(w, app_name: str, flag: Optional[str]) -> Optional[ScopeDecision]:
+    """Decide the scope this deploy writes to the scoring job.
 
     ``flag`` is the already-normalized ``--workspace-ids`` value, or None when the
-    flag was omitted. Omitted keeps the job's current value, or 'all' for a new job
-    (or one made before this setting existed). Returns None, after logging why,
-    when the current value can't be read or isn't valid: falling back to 'all'
-    there could quietly widen a scoped deployment.
+    flag was omitted. Omitted keeps the job's current value. Returns None, after
+    logging why, when the deploy must stop: the current value can't be read or
+    isn't valid, or a scope was asked for on a bundle-managed job deploy.py can't
+    change. Falling back to 'all' in those cases could quietly widen a scoped
+    deployment, and one-time awards are permanent.
     """
     try:
-        current = current_scoring_workspace_ids(w, app_name)
+        job = _find_scoring_job(w, app_name)
     except Exception as exc:  # noqa: BLE001
         if flag is not None:
-            return flag  # an explicit value doesn't depend on the current one
+            return ScopeDecision(flag)  # an explicit value doesn't depend on the current one
         log_err(
             f"Couldn't read the current scoring scope from job '{job_name(app_name)}': "
             f"{str(exc)[:160]}\n"
             "    Pass --workspace-ids explicitly (workspace IDs, or 'all')."
         )
         return None
+    bundle = job is not None and _job_is_bundle(job)
+    current = ((_run_scoring_workspace_ids(job) if job is not None else None) or "").strip() or None
     if current is not None:
         try:
             current = normalize_workspace_ids(current)
         except ValueError:
-            if flag is None:
+            if flag is None and not bundle:
                 log_err(
                     f"The scoring job's workspace_ids parameter is {current!r}, which isn't valid.\n"
                     "    Pass --workspace-ids explicitly (workspace IDs, or 'all')."
                 )
                 return None
-            current = None  # replaced by the flag below
-    if flag is None:
-        if current is not None:
-            log_info(f"Keeping the current scoring scope: {current}")
-        return current or "all"
-    if current is not None and current != flag:
-        log_warn(f"Scoring scope changes from {current} to {flag}.")
-    return flag
+            current = None  # replaced by the flag, or not ours to judge on a bundle job
+    if bundle:
+        if flag is not None and flag != (current or "all"):
+            log_err(
+                f"Job '{job_name(app_name)}' is managed by a Databricks Asset Bundle, so "
+                "deploy.py can't change its scoring scope.\n"
+                "    Set the bundle's workspace_ids variable instead, or deploy with a different --app-name."
+            )
+            return None
+        return ScopeDecision(current or "all", bundle_managed=True)
+    if flag is not None:
+        if current is not None and current != flag:
+            log_warn(f"Scoring scope changes from {current} to {flag}.")
+        return ScopeDecision(flag)
+    if current is not None:
+        log_info(f"Keeping the current scoring scope: {current}")
+        return ScopeDecision(current)
+    return ScopeDecision("all", check_last_run=True)
+
+
+def last_scoring_scope(w, warehouse_id: str, catalog: str, schema: str) -> Optional[str]:
+    """The scope the last scoring run recorded ('' = whole account), or None if there
+    is no record yet (new schema, or no run since this setting existed). Raises if the
+    record exists but can't be read."""
+    sql = (
+        f"SELECT value FROM `{catalog}`.`{schema}`.app_settings "
+        "WHERE `key` = 'scoring_scope_last_run'"
+    )
+    state, resp = _run_check_statement(w, warehouse_id, sql, timeout_s=120.0, poll_s=2.0)
+    if state is None:
+        raise RuntimeError("timed out reading app_settings")
+    if state != "SUCCEEDED":
+        msg = getattr(getattr(getattr(resp, "status", None), "error", None), "message", None) or str(state)
+        if any(m in msg.upper() for m in ("NOT_FOUND", "DOES NOT EXIST", "CANNOT BE FOUND")):
+            return None
+        raise RuntimeError(msg[:200])
+    rows = (getattr(getattr(resp, "result", None), "data_array", None) or [])
+    return (rows[0][0] or "") if rows else None
 
 
 def scoring_task_graph(notebooks_dir: str, catalog: str, schema: str,
@@ -1073,8 +1131,9 @@ def _report_workspace_check(ids: List[str], rows: list, with_names: bool) -> Non
             log_warn(f"Workspace {label}: no billing activity in the last 45 days.")
         elif audit_rows == 0:
             log_warn(
-                f"Workspace {label}: billing activity but no audit rows here, so it's "
-                "probably in another cloud region: only billing and Unity Catalog missions can score it."
+                f"Workspace {label}: billing activity but no audit rows here in the last 7 days, so "
+                "it's probably in another cloud region (or has had no recent user activity): only "
+                "billing and Unity Catalog missions can score it."
             )
         else:
             log_ok(f"Workspace {label}: active (billing on {billing_days} of the last 45 days)")
@@ -1117,7 +1176,7 @@ def check_scoring_workspaces(w, warehouse_id: str, workspace_ids: str,
     )
 
 
-def create_scheduled_job(w, graph: List[dict], app_name: str, workspace_ids: str = "all"):
+def create_scheduled_job(w, graph: List[dict], app_name: str):
     """Create or update the every-4-hours scoring job.
 
     Looks the job up by name first and resets the existing one instead of
@@ -1154,10 +1213,10 @@ def create_scheduled_job(w, graph: List[dict], app_name: str, workspace_ids: str
     existing = next((j for j in w.jobs.list(name=name)), None)
     if existing is not None:
         if _is_bundle_managed(w, existing.job_id):
-            msg = f"Job '{name}' is managed by a Databricks Asset Bundle (deploy.sh); leaving it untouched."
-            if workspace_ids != "all":
-                msg += " The scoring scope was not applied to it."
-            log_warn(msg)
+            log_warn(
+                f"Job '{name}' is managed by a Databricks Asset Bundle "
+                "(deploy.sh); leaving it untouched."
+            )
             log_info("Use deploy.sh for it, or pass a different --app-name.")
             return existing.job_id
         # update, not reset: reset replaces the whole settings object and would
@@ -1468,7 +1527,7 @@ def run(cfg: Config) -> int:
     scope = resolve_scoring_scope(w, cfg.app_name, cfg.workspace_ids)
     if scope is None:
         return 1
-    cfg.workspace_ids = scope
+    cfg.workspace_ids = scope.scope
 
     # ── Step 3: SQL warehouse (always wired, every backend) ───────────────────
     log_step(3, TOTAL_STEPS, "Selecting a SQL warehouse")
@@ -1491,6 +1550,25 @@ def run(cfg: Config) -> int:
         confirm_missing=named_by_flag and can_prompt(cfg.non_interactive),
     )
     log_ok("Catalog, schema, and app_settings ready")
+
+    if scope.check_last_run:
+        # The job has no usable workspace_ids. Before writing 'all', make sure the
+        # last scoring run wasn't scoped, or this deploy would widen it for good.
+        try:
+            last = last_scoring_scope(w, warehouse_id, cfg.catalog, cfg.schema)
+        except Exception as exc:  # noqa: BLE001
+            log_err(
+                f"Couldn't read the last scoring scope from {cfg.catalog}.{cfg.schema}.app_settings: "
+                f"{str(exc)[:160]}\n"
+                "    Pass --workspace-ids explicitly (workspace IDs, or 'all')."
+            )
+            return 1
+        if last:
+            log_err(
+                f"The scoring job has no workspace_ids, but its last run scored only workspaces {last}.\n"
+                f"    Pass --workspace-ids {last} to keep that scope, or --workspace-ids all for the whole account."
+            )
+            return 1
 
     # ── Step 5: upload app source (+ notebooks when present) ──────────────────
     log_step(5, TOTAL_STEPS, "Uploading app source to the workspace")
@@ -1588,7 +1666,7 @@ def run(cfg: Config) -> int:
     )
     job_id = None
     try:
-        job_id = create_scheduled_job(w, graph, cfg.app_name, workspace_ids=cfg.workspace_ids or "all")
+        job_id = create_scheduled_job(w, graph, cfg.app_name)
         log_ok(f"Scoring job {job_id} scheduled (every 4 hours, UTC)")
     except Exception as exc:  # noqa: BLE001
         log_warn(f"Scheduled job: {str(exc)[:160]}")
@@ -1610,7 +1688,9 @@ def run(cfg: Config) -> int:
     log_ok(f"App: {cfg.app_name}  state={state}")
 
     scope_ids = [] if cfg.workspace_ids == "all" else cfg.workspace_ids.split(",")
-    if scope_ids:
+    if job_id is None and not scope.bundle_managed:
+        log_warn("Scoring scope: not applied, because the scoring job couldn't be created or updated (see above).")
+    elif scope_ids:
         noun = "workspace" if len(scope_ids) == 1 else "workspaces"
         log_ok(f"Scoring scope: {len(scope_ids)} {noun} ({', '.join(scope_ids)})")
     else:

@@ -307,13 +307,21 @@ except Exception as e:
     raise RuntimeError(f"Could not read the scoring scope record in {tbl('app_settings')}: {e}") from e
 _last_scope = None if _row is None else (_row["value"] or "")
 _this_scope = ",".join(SCOPED_WORKSPACE_IDS)
-if not SCOPE_PROVIDED and _last_scope:
-    raise RuntimeError(
-        f"This deployment scores only workspaces {_last_scope}, but this run got no "
-        f"workspace_ids parameter. Pass workspace_ids={_last_scope} to keep that scope, "
-        f"or workspace_ids=all to score the whole account. To change the scheduled "
-        f"job's scope, re-run deploy.py with --workspace-ids."
-    )
+
+
+def check_scope_not_widened(scope_provided, last_scope):
+    """Stop a run that got no workspace_ids when the last run was scoped."""
+    if not scope_provided and last_scope:
+        raise RuntimeError(
+            f"This deployment scores only workspaces {last_scope}, but this run got no "
+            f"workspace_ids parameter. Pass workspace_ids={last_scope} to keep that scope, "
+            f"or workspace_ids=all to score the whole account. To change the scheduled "
+            f"job's scope, re-run deploy.py with --workspace-ids (or set the bundle's "
+            f"workspace_ids variable if the job is bundle-managed)."
+        )
+
+
+check_scope_not_widened(SCOPE_PROVIDED, _last_scope)
 if _last_scope != _this_scope:
     spark.sql(f"""
     MERGE INTO {tbl('app_settings')} t

@@ -11,6 +11,8 @@ import pathlib
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 spec = importlib.util.spec_from_file_location(
     "deploy", pathlib.Path(__file__).resolve().parent.parent / "deploy.py"
 )
@@ -701,16 +703,6 @@ def test_scheduled_job_leaves_bundle_managed_job_alone():
     w.jobs.create.assert_not_called()
 
 
-def test_scheduled_job_bundle_managed_notes_scope_not_applied(capsys):
-    # When a scoped deploy encounters a bundle-managed job, the warning should
-    # note that the scope wasn't applied.
-    w = MagicMock()
-    _existing_job(w, job_id=99, bundle=True)
-    deploy.create_scheduled_job(w, _graph(), "databricks-quest", workspace_ids="111,222")
-    out = capsys.readouterr().out
-    assert "The scoring scope was not applied to it" in out
-
-
 def test_scheduled_job_creates_when_absent():
     w = MagicMock()
     w.jobs.list.return_value = iter([])
@@ -911,7 +903,7 @@ def test_normalize_workspace_ids_rejects_20_digits():
 
 
 def test_normalize_workspace_ids_accepts_19_digits():
-    # 19 digits is the max (2^64-1 for workspace IDs)
+    # 19 digits is the max: BIGINT's 2^63-1 is 19 digits long
     result = deploy.normalize_workspace_ids("1234567890123456789")
     assert result == "1234567890123456789"
 
@@ -1181,45 +1173,149 @@ def test_check_scoring_workspaces_both_attempts_failing_warns(capsys):
 
 
 # ── resolve_scoring_scope: flag vs the scoring job's current value ────────────
-def _with_current(monkeypatch, value=None, raises=None):
+def _fake_job(value=None, bundle=False, has_param=True):
+    task = MagicMock()
+    task.task_key = "run_scoring"
+    task.notebook_task.base_parameters = {"workspace_ids": value} if has_param else {"quest_catalog": "c"}
+    job = MagicMock()
+    job.settings.tasks = [task]
+    job.settings.deployment = MagicMock(kind="BUNDLE") if bundle else None
+    return job
+
+
+def _with_job(monkeypatch, job=None, raises=None):
     def fake(w, app_name):
         if raises:
             raise raises
-        return value
-    monkeypatch.setattr(deploy, "current_scoring_workspace_ids", fake)
+        return job
+    monkeypatch.setattr(deploy, "_find_scoring_job", fake)
 
 
 def test_scope_flag_wins_and_warns_on_change(monkeypatch, capsys):
-    _with_current(monkeypatch, "111")
-    assert deploy.resolve_scoring_scope(MagicMock(), "app", "222") == "222"
+    _with_job(monkeypatch, _fake_job("111"))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", "222")
+    assert (d.scope, d.check_last_run, d.bundle_managed) == ("222", False, False)
     assert "changes from 111 to 222" in capsys.readouterr().out
 
 
 def test_scope_omitted_keeps_current(monkeypatch, capsys):
-    _with_current(monkeypatch, "111,222")
-    assert deploy.resolve_scoring_scope(MagicMock(), "app", None) == "111,222"
+    _with_job(monkeypatch, _fake_job("111,222"))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+    assert (d.scope, d.check_last_run) == ("111,222", False)
     assert "Keeping the current scoring scope" in capsys.readouterr().out
 
 
-def test_scope_omitted_new_or_legacy_job_is_all(monkeypatch):
-    _with_current(monkeypatch, None)
-    assert deploy.resolve_scoring_scope(MagicMock(), "app", None) == "all"
+def test_scope_omitted_with_no_usable_value_checks_the_last_run(monkeypatch):
+    # No job yet, a job from before this setting (no parameter), or an empty value
+    # (the bundle default) all mean "all", but only after confirming the last run
+    # wasn't scoped (see test_run_* below).
+    for job in (None, _fake_job(has_param=False), _fake_job(""), _fake_job("  ")):
+        _with_job(monkeypatch, job)
+        d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+        assert (d.scope, d.check_last_run) == ("all", True)
 
 
 def test_scope_omitted_and_unreadable_stops_the_deploy(monkeypatch, capsys):
-    _with_current(monkeypatch, raises=Exception("PERMISSION_DENIED"))
+    _with_job(monkeypatch, raises=Exception("PERMISSION_DENIED"))
     assert deploy.resolve_scoring_scope(MagicMock(), "app", None) is None
     assert "Pass --workspace-ids explicitly" in capsys.readouterr().out
 
 
 def test_scope_omitted_and_malformed_stops_the_deploy(monkeypatch, capsys):
-    _with_current(monkeypatch, "")  # e.g. the bundle default, or a hand edit
+    _with_job(monkeypatch, _fake_job("abc"))
     assert deploy.resolve_scoring_scope(MagicMock(), "app", None) is None
     assert "isn't valid" in capsys.readouterr().out
 
 
 def test_scope_flag_given_ignores_unreadable_or_malformed_current(monkeypatch):
-    _with_current(monkeypatch, raises=Exception("boom"))
-    assert deploy.resolve_scoring_scope(MagicMock(), "app", "all") == "all"
-    _with_current(monkeypatch, "abc")
-    assert deploy.resolve_scoring_scope(MagicMock(), "app", "111") == "111"
+    _with_job(monkeypatch, raises=Exception("boom"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "all").scope == "all"
+    _with_job(monkeypatch, _fake_job("abc"))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "111").scope == "111"
+
+
+def test_scope_on_a_bundle_job_is_left_to_the_bundle(monkeypatch, capsys):
+    # deploy.py never edits a bundle-managed job, so it must not claim a new scope.
+    _with_job(monkeypatch, _fake_job("", bundle=True))
+    assert deploy.resolve_scoring_scope(MagicMock(), "app", "111") is None
+    assert "managed by a Databricks Asset Bundle" in capsys.readouterr().out
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", None)
+    assert (d.scope, d.check_last_run, d.bundle_managed) == ("all", False, True)
+    _with_job(monkeypatch, _fake_job("111", bundle=True))
+    d = deploy.resolve_scoring_scope(MagicMock(), "app", "111")  # same value: fine
+    assert (d.scope, d.bundle_managed) == ("111", True)
+
+
+# ── last_scoring_scope: the record the scoring notebook writes ────────────────
+def _stmt(state, rows=None, error=None):
+    resp = MagicMock()
+    resp.status.state.value = state
+    resp.status.error.message = error
+    resp.result.data_array = rows
+    return resp
+
+
+def test_last_scoring_scope_reads_the_record():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [["111,222"]])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") == "111,222"
+    sql = w.statement_execution.execute_statement.call_args.kwargs["statement"]
+    assert "`cat`.`sch`.app_settings" in sql and "scoring_scope_last_run" in sql
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [[None]])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") == ""
+
+
+def test_last_scoring_scope_none_when_there_is_no_record_yet():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("SUCCEEDED", [])
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") is None
+    w.statement_execution.execute_statement.return_value = _stmt(
+        "FAILED", error="[TABLE_OR_VIEW_NOT_FOUND] The table or view `cat`.`sch`.`app_settings` cannot be found."
+    )
+    assert deploy.last_scoring_scope(w, "wh", "cat", "sch") is None
+
+
+def test_last_scoring_scope_raises_when_unreadable():
+    w = MagicMock()
+    w.statement_execution.execute_statement.return_value = _stmt("FAILED", error="PERMISSION_DENIED: no SELECT")
+    with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
+        deploy.last_scoring_scope(w, "wh", "cat", "sch")
+
+
+# ── run(): the last-run check before writing 'all' ────────────────────────────
+class _ReachedUpload(Exception):
+    """Raised by the stubbed upload step: the deploy got past the scope checks."""
+
+
+def _stub_run_until_upload(monkeypatch, last_scope):
+    w = MagicMock()
+    w.current_user.me.return_value.user_name = "me@x.com"
+    monkeypatch.setattr(deploy, "get_client", lambda *a, **k: w)
+    monkeypatch.setattr(deploy, "resolve_scoring_scope",
+                        lambda *a, **k: deploy.ScopeDecision("all", check_last_run=True))
+    monkeypatch.setattr(deploy, "resolve_warehouse", lambda *a, **k: "wh")
+    monkeypatch.setattr(deploy, "resolve_catalog", lambda *a, **k: "cat")
+    monkeypatch.setattr(deploy, "setup_unity_catalog", lambda *a, **k: None)
+    monkeypatch.setattr(deploy, "last_scoring_scope", lambda *a, **k: last_scope)
+
+    def reached(*a, **k):
+        raise _ReachedUpload()
+    monkeypatch.setattr(deploy, "upload_dir", reached)
+    return deploy.Config(catalog="cat", non_interactive=True)
+
+
+def test_run_stops_instead_of_widening_a_scoped_deployment(monkeypatch, capsys):
+    # The job lost its workspace_ids (e.g. recreated by an older deploy.py), but the
+    # last scoring run was scoped: writing 'all' would widen it for good.
+    cfg = _stub_run_until_upload(monkeypatch, last_scope="111,222")
+    assert deploy.run(cfg) == 1
+    out = capsys.readouterr().out
+    assert "its last run scored only workspaces 111,222" in out
+    assert "--workspace-ids 111,222" in out
+
+
+def test_run_continues_when_the_last_run_was_unscoped_or_never_ran(monkeypatch):
+    for last in ("", None):
+        cfg = _stub_run_until_upload(monkeypatch, last_scope=last)
+        with pytest.raises(_ReachedUpload):
+            deploy.run(cfg)

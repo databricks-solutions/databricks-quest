@@ -108,12 +108,18 @@ keeps the notebook's copy of this rule in lockstep with `deploy.py`'s.
   name, `w.jobs.get`, picks the task with `task_key == "run_scoring"`, returns
   `notebook_task.base_parameters.get("workspace_ids")`. Every level is Optional in
   the SDK, so `None` at any level returns `None`.
-- `resolve_scoring_scope(w, app_name, flag)`, called in `run()` before anything is
-  created: flag given -> normalized flag (warn when it replaces a different current
-  value); else the current job value; else `all` (new job, or one made before this
-  setting). If the flag is omitted and the current value can't be read or isn't
-  valid (including empty), the deploy stops and asks for `--workspace-ids`:
-  falling back to `all` could quietly widen a scoped deployment.
+- `resolve_scoring_scope(w, app_name, flag) -> ScopeDecision`, called in `run()`
+  before anything is created: flag given -> normalized flag (warn when it replaces
+  a different current value); else the current job value; else `all` with
+  `check_last_run` set (no job yet, a job from before this setting, or an empty
+  parameter). If the flag is omitted and the current value can't be read or isn't
+  valid, the deploy stops and asks for `--workspace-ids`. A bundle-managed job is
+  never edited, so asking for a different scope on one stops the deploy with a
+  pointer to the bundle's `workspace_ids` variable.
+- `last_scoring_scope(...)`: when `check_last_run` is set, after Step 4 the deploy
+  reads `scoring_scope_last_run` from `app_settings`. If the last run was scoped it
+  stops ("pass `--workspace-ids <ids>` to keep that scope, or `all`") instead of
+  writing `all` and widening it; no record or an empty record means `all`.
 - `scoring_task_graph(..., workspace_ids: str = "all")` adds `workspace_ids` to the
   `run_scoring` params. The default keeps existing positional callers working.
 - `render_app_yaml(..., scoring_workspace_ids: str = "all")` emits
@@ -128,8 +134,8 @@ keeps the notebook's copy of this rule in lockstep with `deploy.py`'s.
   (needs SELECT on system.access and system.billing)" and the deploy continues.
 - The deploy summary prints `Scoring scope: whole account` or
   `Scoring scope: N workspace(s) (id, id)`.
-- A bundle-managed job is still left untouched (existing behaviour); the warning
-  notes the scope wasn't applied to it.
+- A bundle-managed job is still left untouched (existing behaviour). If the job
+  can't be created or updated, the summary says the scope wasn't applied.
 
 ## Component 2: databricks.yml
 
@@ -187,8 +193,9 @@ empty value is "not provided", which the notebook guard below handles.
 | Account-level event in any other service | Not counted while scoped (none seen for mission actions) |
 | Deployer can't read system tables | Pre-flight says it couldn't check; deploy continues |
 | Redeploy without the flag | Current scope kept |
-| Job created by an older deploy.py | Treated as `all` on the next redeploy |
-| Bundle-managed job | Left untouched, warning says the scope wasn't applied |
+| Job without the parameter (older deploy.py, or empty) | `all`, unless the last run was scoped: then the deploy stops and asks for the flag |
+| Bundle-managed job | Left untouched; asking for a different scope stops the deploy (set the bundle variable instead) |
+| Scoring job can't be created or updated | Summary says the scope wasn't applied |
 
 Performance: scoped reads scan the same files as today; the filter only cuts the
 rows that flow into the aggregations. The pre-flight is one statement at deploy
@@ -210,13 +217,18 @@ time.
 - `python -m compileall app notebooks`, the full pytest suite, `npm run test`,
   `npm run build`.
 - Live E2E on a field test workspace with a separate app (its own app name, schema and
-  warehouse, warehouse backend; the workspace's existing Quest app and its resources
-  are not touched): deploy scoped to one workspace; check the job
-  parameter, app env and pre-flight output; scoring run succeeds; every scored
-  user outside Get Started training has activity in that workspace in the scoped
-  sources; Insights shows the scope; redeploy without the flag keeps it; a run
-  with an empty parameter fails with the guard message; read-only before/after
-  snapshot shows the workspace's existing Quest app unchanged.
+  warehouse; the workspace's existing Quest app and its resources are not touched,
+  confirmed by a read-only before/after snapshot):
+  1. Warehouse backend, scoped to one workspace: job parameter, app env and
+     pre-flight output correct; scoring run succeeds; 1 scored user against 4,494
+     human billing users in the region; Insights shows the scope; a hand run
+     without `workspace_ids` fails with the guard message and writes nothing.
+  2. Redeploy on the Lakebase backend without the flag: scope kept; Lakebase
+     created through the database-instance API (4-8 CU, Postgres 16); sync
+     succeeds; the app serves the scoped data from Lakebase.
+  3. Two workspaces, one in another region: the deploy warns the scope changes and
+     flags the other-region workspace; scoring adds its users through billing and
+     account-level Unity Catalog events, and keeps the awards already earned.
 
 ## Docs to update
 

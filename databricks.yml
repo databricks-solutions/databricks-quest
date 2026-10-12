@@ -23,7 +23,7 @@ variables:
     description: Adoption data backend — "lakebase" (default) or "warehouse"
     default: lakebase
   workspace_ids:
-    description: Score only these workspace IDs (comma-separated), or "all". Empty means not set (whole account unless the last run was scoped, in which case the run stops)
+    description: Score only these workspace IDs, or "all". Pass several as BUNDLE_VAR_workspace_ids=111,222 or --var "workspace_ids=111 222" (--var splits on commas). Empty means not set (whole account unless the last run was scoped, in which case the run stops)
     default: ""
 
 resources:

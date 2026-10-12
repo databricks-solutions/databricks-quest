@@ -917,9 +917,9 @@ def last_scoring_scope(w, warehouse_id: str, catalog: str, schema: str) -> Optio
         f"SELECT value FROM `{catalog}`.`{schema}`.app_settings "
         "WHERE `key` = 'scoring_scope_last_run'"
     )
-    state, resp = _run_check_statement(w, warehouse_id, sql, timeout_s=120.0, poll_s=2.0)
+    state, resp = _run_check_statement(w, warehouse_id, sql, timeout_s=300.0, poll_s=2.0)
     if state is None:
-        raise RuntimeError("timed out reading app_settings")
+        raise RuntimeError("timed out after 5 minutes reading app_settings (is the warehouse busy?)")
     if state != "SUCCEEDED":
         msg = getattr(getattr(getattr(resp, "status", None), "error", None), "message", None) or str(state)
         if any(m in msg.upper() for m in ("NOT_FOUND", "DOES NOT EXIST", "CANNOT BE FOUND")):

@@ -44,7 +44,7 @@ python deploy.py ...                                                     # keep 
 - Audit: "Account-level audit logs record `workspace_id` as `0`." For Unity
   Catalog and lineage events, "The originating workspace ID is included in
   `request_params.workspace_id`" (audit log reference).
-- Live check on an AWS us-east-1 field test workspace, last 30 days: every Unity Catalog action the
+- Live check on an AWS field test workspace, last 30 days: every Unity Catalog action the
   missions read (`createCatalog`, `createExternalLocation`,
   `createStorageCredential`, `createConnection`, `createShare`, `createRecipient`,
   `createRegisteredModel`, `updatePermissions`) is `ACCOUNT_LEVEL` with
@@ -58,9 +58,9 @@ python deploy.py ...                                                     # keep 
   only hold workspaces in the same cloud region as the workspace that queries
   them. A workspace in another region can only earn billing-based and Unity
   Catalog missions (account-level audit events, which include Unity Catalog, are
-  global). Confirmed live: from a us-east-1 workspace, a workspace in another region
-  showed 0 workspace-level audit rows but 26,543 account-level Unity Catalog rows
-  in 45 days.
+  global). Seen live: from the Quest workspace, a second workspace that appears to
+  be in another region showed no workspace-level audit rows at all, but plenty of
+  account-level Unity Catalog rows, and its users earned Unity Catalog missions.
 - `system.access.workspaces_latest` (Public Preview, global) has `workspace_id`,
   `workspace_name`, `workspace_url`, `status`; no region column.
 - The scoring job sets no `run_as`, so it runs as its creator. Nothing grants the
@@ -220,13 +220,14 @@ time.
   warehouse; the workspace's existing Quest app and its resources are not touched,
   confirmed by a read-only before/after snapshot):
   1. Warehouse backend, scoped to one workspace: job parameter, app env and
-     pre-flight output correct; scoring run succeeds; 1 scored user against 4,494
-     human billing users in the region; Insights shows the scope; a hand run
+     pre-flight output correct; scoring run succeeds and scores only the one user
+     active there, out of thousands of human billing users in the account; Insights
+     shows the scope; a hand run
      without `workspace_ids` fails with the guard message and writes nothing.
   2. Redeploy on the Lakebase backend without the flag: scope kept; Lakebase
      created through the database-instance API (4-8 CU, Postgres 16); sync
      succeeds; the app serves the scoped data from Lakebase.
-  3. Two workspaces, one in another region: the deploy warns the scope changes and
+  3. Two workspaces, one that appears to be in another region: the deploy warns the scope changes and
      flags the other-region workspace; scoring adds its users through billing and
      account-level Unity Catalog events, and keeps the awards already earned.
 

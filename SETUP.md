@@ -76,7 +76,7 @@ Notes:
 
 - It does not use Databricks Asset Bundles, so there is no bundle state to manage.
 - It does not build the frontend; it ships the pre-built `app/static/`.
-- With the Lakebase backend (the default) and no `--lakebase-host`, it creates the database through the Lakebase database-instance API at capacity `CU_1`. Since March 2026 that API creates a Lakebase Autoscaling project named after the app. In our tests it came up with 4 to 8 CU of autoscaling compute (about 2 GB of RAM per CU), Postgres 16 and a 7-day restore window, and the docs give it scale-to-zero after 24 hours idle. The 4-hourly scoring sync means it is never idle that long, so expect it to stay on at 4 CU or more. If that's more than you need, resize the compute from the project's settings in the Lakebase UI, or use `--data-backend warehouse`.
+- With the Lakebase backend (the default) and no `--lakebase-host`, it creates the database through the Lakebase database-instance API at capacity `CU_1`. Per the Lakebase docs, since March 2026 that API creates a Lakebase Autoscaling project named after the app. In our tests it came up with 4 to 8 CU of autoscaling compute (about 2 GB of RAM per CU), Postgres 16 and a 7-day restore window, and the docs give it scale-to-zero after 24 hours idle. The 4-hourly scoring sync means it is never idle that long, so expect it to stay on at 4 CU or more. If that's more than you need, resize the compute from the project's settings in the Lakebase UI, or use `--data-backend warehouse`.
 - `--workspace-ids` limits scoring to the workspaces you list; see [Scoring scope (optional)](#scoring-scope-optional).
 
 Full reference, including every flag and the Windows prerequisites: **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.

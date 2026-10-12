@@ -76,6 +76,8 @@ Notes:
 
 - It does not use Databricks Asset Bundles, so there is no bundle state to manage.
 - It does not build the frontend; it ships the pre-built `app/static/`.
+- With the Lakebase backend (the default) and no `--lakebase-host`, it creates the database through the Lakebase database-instance API at capacity `CU_1`. Since March 2026 that API creates a Lakebase Autoscaling project named after the app. In our tests it came up with 4 to 8 CU of autoscaling compute (about 2 GB of RAM per CU), Postgres 16 and a 7-day restore window, and the docs give it scale-to-zero after 24 hours idle. The 4-hourly scoring sync means it is never idle that long, so expect it to stay on at 4 CU or more. If that's more than you need, resize the compute from the project's settings in the Lakebase UI, or use `--data-backend warehouse`.
+- `--workspace-ids` limits scoring to the workspaces you list; see [Scoring scope (optional)](#scoring-scope-optional).
 
 Full reference, including every flag and the Windows prerequisites: **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)**.
 
@@ -181,7 +183,7 @@ For manual runs (Options A and B, and the scheduled job in Step 9), set the `wor
 
 Key notes:
 
-- **Regions:** Only `system.billing.usage` is global. `query.history`, `assistant_events`, the Lakeflow tables, and workspace-level audit events only contain workspaces in the same cloud region as the Quest workspace. A workspace in another region can only earn billing-based missions.
+- **Regions:** `system.billing.usage` and account-level audit events are global. `query.history`, `assistant_events`, the Lakeflow tables, and workspace-level audit events only contain workspaces in the same cloud region as the Quest workspace. So a workspace in another region can only earn billing-based and Unity Catalog missions (Unity Catalog events are logged at account level).
 - **Unity Catalog:** Unity Catalog audit events are logged at account level (`workspace_id` `0`) with the originating workspace in `request_params.workspace_id`. The scope filter matches either, so the Unity Catalog missions keep working. A small share of those events carry no originating workspace and don't count while a scope is set.
 
 ### Step 8: Run the scoring pipeline

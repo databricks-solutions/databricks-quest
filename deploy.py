@@ -1074,7 +1074,7 @@ def _report_workspace_check(ids: List[str], rows: list, with_names: bool) -> Non
         elif audit_rows == 0:
             log_warn(
                 f"Workspace {label}: billing activity but no audit rows here, so it's "
-                "probably in another cloud region: only billing-based missions can score it."
+                "probably in another cloud region: only billing and Unity Catalog missions can score it."
             )
         else:
             log_ok(f"Workspace {label}: active (billing on {billing_days} of the last 45 days)")

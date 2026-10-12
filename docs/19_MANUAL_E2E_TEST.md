@@ -25,6 +25,15 @@ Python installed, and a running SQL warehouse for Event-Mode resource/SQL steps.
 6. **Admin.** Open the Admin page (as an allowlisted admin).
    - *Expect:* pipeline health and stats render.
 
+7. **Scoring scope (optional).** Redeploy with `python deploy.py ... --workspace-ids <id>[,<id>]`.
+   - *Expect:* the deploy prints a line per ID (name, activity, or a warning for an
+     unknown ID, an idle workspace, or one that's probably in another region) and
+     `Scoring scope: N workspace(s)`. Insights shows `Scope: ... · set at deploy time`.
+     After the scoring run, only users with activity in those workspaces appear on
+     the leaderboard. Redeploying without the flag prints `Keeping the current
+     scoring scope`, and a hand run of the notebook without `workspace_ids` fails
+     with `This deployment scores only workspaces ...`.
+
 ✅ Adoption Mode verified — GameDay routes should be **404** in this deploy.
 
 ---

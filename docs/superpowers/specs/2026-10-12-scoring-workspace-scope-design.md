@@ -44,7 +44,7 @@ python deploy.py ...                                                     # keep 
 - Audit: "Account-level audit logs record `workspace_id` as `0`." For Unity
   Catalog and lineage events, "The originating workspace ID is included in
   `request_params.workspace_id`" (audit log reference).
-- Live check on fevm-deep-test-1, last 30 days: every Unity Catalog action the
+- Live check on an AWS us-east-1 field test workspace, last 30 days: every Unity Catalog action the
   missions read (`createCatalog`, `createExternalLocation`,
   `createStorageCredential`, `createConnection`, `createShare`, `createRecipient`,
   `createRegisteredModel`, `updatePermissions`) is `ACCOUNT_LEVEL` with
@@ -56,7 +56,11 @@ python deploy.py ...                                                     # keep 
 - Regional data: only `billing.usage` is global. `query.history`,
   `assistant_events`, the five `lakeflow` tables and workspace-level audit events
   only hold workspaces in the same cloud region as the workspace that queries
-  them. A workspace in another region can only earn billing-based missions.
+  them. A workspace in another region can only earn billing-based and Unity
+  Catalog missions (account-level audit events, which include Unity Catalog, are
+  global). Confirmed live: from a us-east-1 workspace, a workspace in another region
+  showed 0 workspace-level audit rows but 26,543 account-level Unity Catalog rows
+  in 45 days.
 - `system.access.workspaces_latest` (Public Preview, global) has `workspace_id`,
   `workspace_name`, `workspace_url`, `status`; no region column.
 - The scoring job sets no `run_as`, so it runs as its creator. Nothing grants the
@@ -120,7 +124,7 @@ keeps the notebook's copy of this rule in lockstep with `deploy.py`'s.
   in the last 45 days, and workspace-level audit rows in the last 7 days. Prints
   one line per ID and flags: *not found in this account*, *no billing activity in
   45 days*, *billing but no audit rows here: probably another cloud region, only
-  billing-based missions can score*. Any error or timeout prints "couldn't check
+  billing and Unity Catalog missions can score*. Any error or timeout prints "couldn't check
   (needs SELECT on system.access and system.billing)" and the deploy continues.
 - The deploy summary prints `Scoring scope: whole account` or
   `Scoring scope: N workspace(s) (id, id)`.
@@ -178,7 +182,7 @@ empty value is "not provided", which the notebook guard below handles.
 | Scoped deployment, run with no parameter | Scoring run fails with the fix |
 | `app_settings` record unreadable | Scoring run fails (fail closed) |
 | Unknown or cancelled workspace ID | Pre-flight warns; it contributes nothing |
-| Workspace in another region | Pre-flight warns; only billing missions can score |
+| Workspace in another region | Pre-flight warns; only billing and Unity Catalog missions can score |
 | UC event without an origin workspace | Not counted while scoped (~0.3% of permission changes, ~6% of `createRecipient`) |
 | Account-level event in any other service | Not counted while scoped (none seen for mission actions) |
 | Deployer can't read system tables | Pre-flight says it couldn't check; deploy continues |
@@ -205,14 +209,14 @@ time.
   when it is unset, on both response paths.
 - `python -m compileall app notebooks`, the full pytest suite, `npm run test`,
   `npm run build`.
-- Live E2E on fevm-deep-test-1 with a separate app (`quest-scope-test`, its own
-  schema and warehouse, warehouse backend; the live `quest-adoption` app and its
-  resources are not touched): deploy scoped to one workspace; check the job
+- Live E2E on a field test workspace with a separate app (its own app name, schema and
+  warehouse, warehouse backend; the workspace's existing Quest app and its resources
+  are not touched): deploy scoped to one workspace; check the job
   parameter, app env and pre-flight output; scoring run succeeds; every scored
   user outside Get Started training has activity in that workspace in the scoped
   sources; Insights shows the scope; redeploy without the flag keeps it; a run
   with an empty parameter fails with the guard message; read-only before/after
-  snapshot shows `quest-adoption` unchanged.
+  snapshot shows the workspace's existing Quest app unchanged.
 
 ## Docs to update
 

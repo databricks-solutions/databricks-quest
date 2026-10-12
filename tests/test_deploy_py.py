@@ -1146,6 +1146,7 @@ def test_check_scoring_workspaces_reports_each_id(capsys):
     assert "222 (Finance Dev): no billing activity in the last 45 days" in out
     assert "333 (Sydney): billing activity but no audit rows here" in out
     assert "probably in another cloud region" in out
+    assert "only billing and Unity Catalog missions can score it" in out
     assert "444: not found in this account" in out
     assert "555 (New one): status is PROVISIONING" in out
     assert "111 (Finance Prod): status" not in out

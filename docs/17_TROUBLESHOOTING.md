@@ -162,9 +162,10 @@ Event/GameDay). Start with the health endpoint, then work down by symptom.
     See the next entry.
 - The scoring job's output also prints the scope it used.
 
-### Scoped workspace earns only billing missions
+### Scoped workspace earns only billing and Unity Catalog missions
 - The workspace is probably in a different cloud region from the Quest workspace. Only
-  `system.billing.usage` is global; query history, audit events, Lakeflow and
+  `system.billing.usage` and account-level audit events (which include Unity
+  Catalog) are global; query history, workspace-level audit events, Lakeflow and
   assistant events only hold workspaces in the same region as the workspace that
   queries them. That's true with or without a scope, so removing the scope doesn't
   bring that activity in. To score it, run a Quest deployment in a workspace in that

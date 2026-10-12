@@ -79,6 +79,10 @@ A few things to get right:
   a pre-flight check and stops with the exact `GRANT` if it can't -- surface that to
   the user rather than guessing.
 - **Unattended runs:** add `--non-interactive` (then `--catalog` is required).
+- **Scoring scope (optional):** add `--workspace-ids <id>,<id>` only if the user wants
+  points from specific workspaces rather than the whole account. Leave it off on a
+  re-run to keep whatever the deployment already uses; `--workspace-ids all` goes back
+  to the whole account. Details in [../SETUP.md](../SETUP.md#scoring-scope-optional).
 - **Re-runs are safe:** `deploy.py` reuses the app, warehouse, catalog, and job, so
   if a check below fails you can fix the cause and run it again.
 

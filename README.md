@@ -42,10 +42,10 @@ git clone https://github.com/databricks-solutions/databricks-quest.git
 cd databricks-quest
 pip install -r requirements.txt
 databricks auth login --host https://YOUR_WORKSPACE.cloud.databricks.com
-python deploy.py --catalog YOUR_CATALOG --data-backend warehouse
+python deploy.py --catalog YOUR_CATALOG --data-backend lakebase
 ```
 
-It asks which Unity Catalog to use (or takes `--catalog <name>`), creates the schema, uploads and deploys the Databricks App, grants the app's service principal access, creates the 4-hourly scoring job, and prints the app URL. Roughly 5 minutes, and re-running it is safe. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)** for the full flag reference and prerequisites.
+It asks which Unity Catalog to use (or takes `--catalog <name>`), creates the schema, provisions the Lakebase database the app reads from, uploads and deploys the Databricks App, grants the app's service principal access, creates the 4-hourly scoring job, and prints the app URL. Roughly 5 minutes, plus about 5 more the first time while Lakebase is provisioned, and re-running it is safe. See **[docs/WINDOWS_DEPLOY.md](docs/WINDOWS_DEPLOY.md)** for the full flag reference and prerequisites.
 
 ### Data backend (Lakebase or SQL warehouse)
 

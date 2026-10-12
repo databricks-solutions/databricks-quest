@@ -1013,13 +1013,13 @@ def _workspace_check_sql(ids: List[str], with_names: bool) -> str:
 billing AS (
   SELECT workspace_id, COUNT(DISTINCT usage_date) AS billing_days
   FROM system.billing.usage
-  WHERE workspace_id IN ({in_list}) AND usage_date >= current_date() - 45
+  WHERE workspace_id IN ({in_list}) AND usage_date > current_date() - 45
   GROUP BY workspace_id
 ),
 audit AS (
   SELECT workspace_id, COUNT(*) AS audit_rows
   FROM system.access.audit
-  WHERE workspace_id IN ({in_list}) AND event_date >= current_date() - 7
+  WHERE workspace_id IN ({in_list}) AND event_date > current_date() - 7
   GROUP BY workspace_id
 ){names_cte}
 SELECT i.workspace_id, {name_cols}, COALESCE(b.billing_days, 0), COALESCE(a.audit_rows, 0)

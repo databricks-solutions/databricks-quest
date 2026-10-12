@@ -1122,6 +1122,9 @@ def test_check_scoring_workspaces_aggregates_each_table_before_joining():
     # never multiplies raw billing rows by raw audit rows.
     assert sql.count("GROUP BY workspace_id") == 2
     assert "workspace_id IN ('111', '222')" in sql
+    # "the last 45 days" / "the last 7 days", today included (not 46 / 8 calendar days).
+    assert "usage_date > current_date() - 45" in sql
+    assert "event_date > current_date() - 7" in sql
     assert "system.access.workspaces_latest" in sql
     assert "system.access.workspaces_latest" not in deploy._workspace_check_sql(["111"], with_names=False)
 

@@ -104,9 +104,12 @@ keeps the notebook's copy of this rule in lockstep with `deploy.py`'s.
   name, `w.jobs.get`, picks the task with `task_key == "run_scoring"`, returns
   `notebook_task.base_parameters.get("workspace_ids")`. Every level is Optional in
   the SDK, so `None` at any level returns `None`.
-- Resolution in `run()`: flag given -> normalized flag; else the current job value
-  (normalized, falling back to `all` if malformed); else `all`. When the flag
-  replaces a different current value, log a warning saying so.
+- `resolve_scoring_scope(w, app_name, flag)`, called in `run()` before anything is
+  created: flag given -> normalized flag (warn when it replaces a different current
+  value); else the current job value; else `all` (new job, or one made before this
+  setting). If the flag is omitted and the current value can't be read or isn't
+  valid (including empty), the deploy stops and asks for `--workspace-ids`:
+  falling back to `all` could quietly widen a scoped deployment.
 - `scoring_task_graph(..., workspace_ids: str = "all")` adds `workspace_ids` to the
   `run_scoring` params. The default keeps existing positional callers working.
 - `render_app_yaml(..., scoring_workspace_ids: str = "all")` emits
@@ -142,9 +145,10 @@ empty value is "not provided", which the notebook guard below handles.
   value, so this only catches hand runs (SETUP.md), jobs from an older `deploy.py`,
   and the bundle path. If the record can't be read the run fails rather than
   guessing. The record is not configuration: changing it doesn't change scoring.
-- **Scoped sources.** `_scoped(table, predicate)` returns the bare table name when
-  there is no scope, so today's SQL runs byte-for-byte, otherwise
-  `(SELECT * FROM <table> WHERE <predicate>)`. Nine constants (`SYS_BILLING_USAGE`,
+- **Scoped sources.** `system_sources(workspace_ids)` maps each table in
+  `_SYSTEM_TABLES` to the bare table name when there is no scope, so today's SQL
+  runs byte-for-byte, otherwise to `(SELECT * FROM <table> WHERE <predicate>)`.
+  Nine constants (`SYS_BILLING_USAGE`,
   `SYS_AUDIT`, `SYS_ASSISTANT_EVENTS`, `SYS_QUERY_HISTORY`, `SYS_JOBS`,
   `SYS_JOB_TASKS`, `SYS_JOB_RUN_TIMELINE`, `SYS_PIPELINES`,
   `SYS_PIPELINE_UPDATE_TIMELINE`) replace all 57 reads. Aliases, time windows,

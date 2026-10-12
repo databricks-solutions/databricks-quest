@@ -165,6 +165,25 @@ databricks workspace import-dir notebooks /Workspace/Users/YOUR_EMAIL/databricks
 
 Replace `YOUR_EMAIL` with your Databricks email address.
 
+### Scoring scope (optional)
+
+By default, the scoring pipeline reads system-table activity from your entire account. To score only selected workspaces instead, pass `--workspace-ids` at deploy time with their workspace IDs (the number after `adb-` in an Azure URL, or the `o=` value in a workspace URL):
+
+```
+python deploy.py --workspace-ids 1234567890123456,6543210987654321 ...
+```
+
+`--workspace-ids all` goes back to the whole account. Leaving the flag off keeps whatever the deployment already uses (a new deployment scores the whole account). The scope can only be set at deploy time; the app shows it read-only on the Insights page. `deploy.py` also checks each ID and warns about unknown IDs, inactive workspaces, and workspaces that are probably in another region.
+
+What it changes: every system-table read in the scoring notebook only sees those workspaces, so the leaderboard, profiles and badges follow. Get Started training points are unaffected. When you set or change the scope, points and badges already earned stay; weekly DBU points, repeatable missions and streaks are recomputed every run, so they follow the new scope from the next run.
+
+For manual runs (Options A and B, and the scheduled job in Step 9), set the `workspace_ids` parameter to the same list, or `all`. On a scoped deployment, a run without `workspace_ids` fails rather than scoring the whole account.
+
+Key notes:
+
+- **Regions:** Only `system.billing.usage` is global. `query.history`, `assistant_events`, the Lakeflow tables, and workspace-level audit events only contain workspaces in the same cloud region as the Quest workspace. A workspace in another region can only earn billing-based missions.
+- **Unity Catalog:** Unity Catalog audit events are logged at account level (`workspace_id` `0`) with the originating workspace in `request_params.workspace_id`. The scope filter matches either, so the Unity Catalog missions keep working. A small share of those events carry no originating workspace and don't count while a scope is set.
+
 ### Step 8: Run the scoring pipeline
 
 The scoring pipeline reads system tables and populates the Quest Delta tables. You need to run it once to create initial data.
@@ -179,6 +198,7 @@ Option A -- Run via the Databricks UI:
    - `quest_schema`: `quest`
    - `app_name`: `databricks-quest`
    - `warehouse_id`: your warehouse ID
+   - `workspace_ids`: `all` (or a comma-separated list of workspace IDs to scope it)
 5. Click "Run All"
 
 Option B -- Run via CLI:
@@ -194,7 +214,8 @@ databricks jobs submit --json '{
         "quest_catalog": "quest_data",
         "quest_schema": "quest",
         "app_name": "databricks-quest",
-        "warehouse_id": "YOUR_WAREHOUSE_ID"
+        "warehouse_id": "YOUR_WAREHOUSE_ID",
+        "workspace_ids": "all"
       },
       "source": "WORKSPACE"
     },
@@ -245,7 +266,8 @@ databricks jobs create --json '{
           "quest_catalog": "quest_data",
           "quest_schema": "quest",
           "app_name": "databricks-quest",
-          "warehouse_id": "YOUR_WAREHOUSE_ID"
+          "warehouse_id": "YOUR_WAREHOUSE_ID",
+          "workspace_ids": "all"
         },
         "source": "WORKSPACE"
       },

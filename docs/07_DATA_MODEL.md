@@ -476,6 +476,32 @@ event-writer Postgres role (provisioned by `deploy.sh --role master`). It holds
 else, so a leaked child credential cannot mutate or delete scores. Standalone and
 master apps continue to use workspace-identity OAuth.
 
+## Adoption Mode operational tables
+
+### app_settings
+
+Small key/value table. It exists in two stores: the Delta table
+`<catalog>.<schema>.app_settings` (created by `deploy.py`, read and written through
+the SQL warehouse) and a Lakebase mirror in the `public` schema.
+
+```sql
+-- Delta
+CREATE TABLE IF NOT EXISTS app_settings (`key` STRING, value STRING, updated_at TIMESTAMP);
+-- Lakebase
+CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP);
+```
+
+Keys:
+
+- `data_backend`: the admin's backend choice (`lakebase` or `warehouse`), set on the
+  Insights page. Delta is authoritative when a warehouse is configured; Lakebase is a
+  best-effort mirror.
+- `scoring_scope_last_run`: Delta only. The scope the last scoring run used (`""` for
+  the whole account, or comma-separated workspace IDs), written by the scoring
+  notebook. It is a record, not configuration: the scope itself is the scoring job's
+  `workspace_ids` parameter, set by `deploy.py --workspace-ids`. A run with no
+  `workspace_ids` fails when this record says the deployment is scoped.
+
 ## Delta analytics tables
 
 Sync these Lakebase tables to Delta as append-only facts or snapshots:

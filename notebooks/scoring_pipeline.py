@@ -28,6 +28,8 @@
 
 # COMMAND ----------
 
+import re
+
 # Reusable predicate: a system.billing.usage row is INTERACTIVE (human at the
 # keyboard) when it is not attributed to a scheduled job run or a pipeline update.
 # usage_metadata.job_id / dlt_pipeline_id are populated only for automated compute.
@@ -67,10 +69,92 @@ WEEKLY_CONSUMPTION_POINT_CAP = 500
 dbutils.widgets.text("quest_catalog", "your_catalog", "Quest Catalog Name")
 dbutils.widgets.text("quest_schema", "quest", "Quest Schema Name")
 dbutils.widgets.text("app_name", "databricks-quest", "Databricks App Name (for auto-granting permissions)")
+dbutils.widgets.text("workspace_ids", "", "Workspace IDs to score (comma-separated), or 'all'")
 
 CATALOG = dbutils.widgets.get("quest_catalog")
 SCHEMA = dbutils.widgets.get("quest_schema")
 APP_NAME = dbutils.widgets.get("app_name")
+
+# Workspace IDs are positive integers with no leading zero; '0' is the audit
+# marker for account-level events, never a real workspace.
+_WORKSPACE_ID_RE = re.compile(r"^[1-9][0-9]{0,18}$")
+
+
+def normalize_workspace_ids(raw):
+    """Canonical scoring scope: 'all', or the workspace IDs joined with ','.
+
+    Splits on commas and whitespace. 'all' (any case) on its own means the whole
+    account. Duplicates are dropped, first occurrence wins. Raises ValueError for
+    an empty value, 'all' mixed with IDs, or a token that isn't a workspace ID.
+    """
+    tokens = [t for t in re.split(r"[\s,]+", (raw or "").strip()) if t]
+    if not tokens:
+        raise ValueError("no workspace IDs given: pass comma-separated workspace IDs, or 'all'")
+    if len(tokens) == 1 and tokens[0].lower() == "all":
+        return "all"
+    ids = []
+    for tok in tokens:
+        if tok.lower() == "all":
+            raise ValueError("'all' can't be combined with workspace IDs")
+        if not _WORKSPACE_ID_RE.match(tok):
+            raise ValueError(
+                f"invalid workspace ID {tok!r}: expected the numeric workspace ID, e.g. 1234567890123456"
+            )
+        if tok not in ids:
+            ids.append(tok)
+    return ",".join(ids)
+
+
+_raw_scope = dbutils.widgets.get("workspace_ids").strip()
+SCOPE_PROVIDED = bool(_raw_scope)
+try:
+    _scope = normalize_workspace_ids(_raw_scope) if SCOPE_PROVIDED else "all"
+except ValueError as e:
+    raise RuntimeError(f"Invalid workspace_ids job parameter {_raw_scope!r}: {e}") from e
+SCOPED_WORKSPACE_IDS = () if _scope == "all" else tuple(_scope.split(","))
+
+_SYSTEM_TABLES = {
+    "billing_usage": "system.billing.usage",
+    "audit": "system.access.audit",
+    "assistant_events": "system.access.assistant_events",
+    "query_history": "system.query.history",
+    "jobs": "system.lakeflow.jobs",
+    "job_tasks": "system.lakeflow.job_tasks",
+    "job_run_timeline": "system.lakeflow.job_run_timeline",
+    "pipelines": "system.lakeflow.pipelines",
+    "pipeline_update_timeline": "system.lakeflow.pipeline_update_timeline",
+}
+
+
+def system_sources(workspace_ids):
+    """FROM-clause text for each system table the missions read.
+
+    No scope -> bare table name so the SQL is unchanged; scoped -> subquery keeping
+    only those workspaces' rows; audit also matches account-level events (workspace_id
+    '0') by request_params['workspace_id'], because Unity Catalog and lineage events
+    are logged at account level with the originating workspace in request_params.workspace_id.
+    """
+    if not workspace_ids:
+        return dict(_SYSTEM_TABLES)
+    ids = ", ".join(f"'{w}'" for w in workspace_ids)
+    ws_pred = f"workspace_id IN ({ids})"
+    audit_pred = f"({ws_pred} OR (workspace_id = '0' AND request_params['workspace_id'] IN ({ids})))"
+    return {
+        name: f"(SELECT * FROM {table} WHERE {audit_pred if name == 'audit' else ws_pred})"
+        for name, table in _SYSTEM_TABLES.items()
+    }
+
+
+_SRC = system_sources(SCOPED_WORKSPACE_IDS)
+SYS_BILLING_USAGE = _SRC["billing_usage"]
+SYS_AUDIT = _SRC["audit"]
+SYS_ASSISTANT_EVENTS = _SRC["assistant_events"]
+SYS_QUERY_HISTORY = _SRC["query_history"]
+SYS_JOBS = _SRC["jobs"]
+SYS_JOB_TASKS = _SRC["job_tasks"]
+SYS_JOB_RUN_TIMELINE = _SRC["job_run_timeline"]
+SYS_PIPELINES = _SRC["pipelines"]
+SYS_PIPELINE_UPDATE_TIMELINE = _SRC["pipeline_update_timeline"]
 
 # Lookback window over system-table data. 45 days (up from 30) so that one-time
 # "creation" missions (job_creator, first_steps, etc.) aren't permanently missed
@@ -207,6 +291,62 @@ print("All tables created successfully.")
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Scoring scope
+# MAGIC Deploy.py always passes workspace_ids explicitly ('all' or the IDs); a run without
+# MAGIC it (a hand run from SETUP.md, a job made by an older deploy.py, the bundle path)
+# MAGIC must not quietly score the whole account when this deployment is scoped, because
+# MAGIC one-time milestones are append-only, so one account-wide run would add other
+# MAGIC workspaces' awards for good.
+
+# COMMAND ----------
+
+spark.sql(f"CREATE TABLE IF NOT EXISTS {tbl('app_settings')} (`key` STRING, value STRING, updated_at TIMESTAMP)")
+try:
+    _row = spark.sql(f"SELECT value FROM {tbl('app_settings')} WHERE `key` = 'scoring_scope_last_run'").first()
+except Exception as e:
+    raise RuntimeError(f"Could not read the scoring scope record in {tbl('app_settings')}: {e}") from e
+_last_scope = None if _row is None else (_row["value"] or "")
+_this_scope = ",".join(SCOPED_WORKSPACE_IDS)
+if not SCOPE_PROVIDED and _last_scope:
+    raise RuntimeError(
+        f"This deployment scores only workspaces {_last_scope}, but this run got no "
+        f"workspace_ids parameter. Pass workspace_ids={_last_scope} to keep that scope, "
+        f"or workspace_ids=all to score the whole account. To change the scheduled "
+        f"job's scope, re-run deploy.py with --workspace-ids."
+    )
+if _last_scope != _this_scope:
+    spark.sql(f"""
+    MERGE INTO {tbl('app_settings')} t
+    USING (SELECT 'scoring_scope_last_run' AS k, '{_this_scope}' AS v) s
+    ON t.`key` = s.k
+    WHEN MATCHED THEN UPDATE SET value = s.v, updated_at = current_timestamp()
+    WHEN NOT MATCHED THEN INSERT (`key`, value, updated_at) VALUES (s.k, s.v, current_timestamp())
+    """)
+
+if _scope == "all":
+    print("Scoring scope: whole account")
+else:
+    print(f"Scoring scope: {len(SCOPED_WORKSPACE_IDS)} workspace(s)")
+    try:
+        _ws_rows = spark.sql(f"""
+            SELECT workspace_id, workspace_name FROM system.access.workspaces_latest
+            WHERE workspace_id IN ({', '.join(f"'{w}'" for w in SCOPED_WORKSPACE_IDS)})
+        """).collect()
+        _ws_by_id = {r["workspace_id"]: r["workspace_name"] for r in _ws_rows}
+        for ws_id in SCOPED_WORKSPACE_IDS:
+            if ws_id in _ws_by_id:
+                print(f"  {ws_id}: {_ws_by_id[ws_id]}")
+            else:
+                print(f"  {ws_id}: not found in this account")
+    except Exception as e:
+        # system.access.workspaces_latest is Public Preview; names are a nicety.
+        print(f"  (couldn't look up workspace names: {str(e)[:120]})")
+        for ws_id in SCOPED_WORKSPACE_IDS:
+            print(f"  {ws_id}")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Step 2: Score Missions
 # MAGIC Each mission is scored via a MERGE to ensure idempotency.
 
@@ -290,7 +430,7 @@ USING (
     MIN(usage_date) AS period_start,
     MIN(usage_date) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.billing.usage
+  FROM {SYS_BILLING_USAGE}
   WHERE identity_metadata.run_as IS NOT NULL
     AND identity_metadata.run_as != ''
     AND identity_metadata.run_as NOT LIKE '%service-principal%'
@@ -331,7 +471,7 @@ USING (
     CAST(MIN(change_time) AS DATE) AS period_start,
     CAST(MIN(change_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.lakeflow.jobs
+  FROM {SYS_JOBS}
   WHERE creator_user_name IS NOT NULL
     AND creator_user_name != ''
     AND delete_time IS NULL
@@ -364,7 +504,7 @@ USING (
     CAST(MIN(change_time) AS DATE) AS period_start,
     CAST(MIN(change_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.lakeflow.pipelines
+  FROM {SYS_PIPELINES}
   WHERE created_by IS NOT NULL
     AND created_by != ''
     AND delete_time IS NULL
@@ -398,7 +538,7 @@ USING (
     CAST(MIN(period_start_time) AS DATE) AS period_start,
     CAST(MIN(period_start_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.lakeflow.pipeline_update_timeline
+  FROM {SYS_PIPELINE_UPDATE_TIMELINE}
   WHERE result_state = 'COMPLETED'
     AND run_as_user_name IS NOT NULL
     AND run_as_user_name != ''
@@ -439,7 +579,7 @@ USING (
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
   FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) AS rn
-    FROM system.lakeflow.jobs
+    FROM {SYS_JOBS}
     WHERE change_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
   ) j
   WHERE j.rn = 1
@@ -482,7 +622,7 @@ USING (
     CAST(MIN(start_time) AS DATE) AS period_start,
     CAST(MIN(start_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.query.history
+  FROM {SYS_QUERY_HISTORY}
   WHERE executed_by IS NOT NULL AND executed_by != ''
     AND (LOWER(statement_text) LIKE '%cloudfiles%' OR LOWER(statement_text) LIKE '%read_files%')
     AND start_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
@@ -513,11 +653,11 @@ USING (
     SELECT
       j.creator_user_name AS user_id,
       CAST(r.period_start_time AS DATE) AS run_date
-    FROM system.lakeflow.job_run_timeline r
+    FROM {SYS_JOB_RUN_TIMELINE} r
     JOIN (
       SELECT job_id, creator_user_name, workspace_id,
              ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) AS rn
-      FROM system.lakeflow.jobs
+      FROM {SYS_JOBS}
     ) j ON r.job_id = j.job_id AND r.workspace_id = j.workspace_id AND j.rn = 1
     WHERE r.result_state IS NOT NULL
       AND r.trigger_type = 'ONETIME'
@@ -528,7 +668,7 @@ USING (
     SELECT
       run_as_user_name AS user_id,
       CAST(period_start_time AS DATE) AS run_date
-    FROM system.lakeflow.pipeline_update_timeline
+    FROM {SYS_PIPELINE_UPDATE_TIMELINE}
     WHERE result_state IS NOT NULL
       AND trigger_type = 'USER_ACTION'
       AND run_as_user_name IS NOT NULL AND run_as_user_name != ''
@@ -575,7 +715,7 @@ USING (
     DATE_TRUNC('WEEK', start_time) AS period_start,
     DATE_ADD(DATE_TRUNC('WEEK', start_time), 6) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.query.history
+  FROM {SYS_QUERY_HISTORY}
   WHERE executed_by IS NOT NULL
     AND executed_by != ''
     AND statement_type IN ('SELECT', 'INSERT', 'MERGE', 'CREATE', 'ALTER')
@@ -620,7 +760,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE action_name = 'genieCreateSpace'
     AND response.status_code = 200
     AND user_identity.email IS NOT NULL
@@ -654,7 +794,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE action_name = 'createDashboard'
     AND response.status_code = 200
     AND user_identity.email IS NOT NULL
@@ -688,7 +828,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'aibiGenie'
     AND action_name IN ('genieStartConversationMessage', 'genieCreateConversationMessage')
     AND response.status_code = 200
@@ -723,7 +863,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'dashboards'
     AND action_name IN ('getPublishedDashboard', 'getPublishedDashboardEmbedded')
     AND response.status_code = 200
@@ -759,7 +899,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.assistant_events
+  FROM {SYS_ASSISTANT_EVENTS}
   WHERE initiated_by IS NOT NULL
     AND initiated_by LIKE '%@%'
     AND event_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
@@ -797,7 +937,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name IN ('databaseInstances', 'postgres')
     AND action_name IN ('createDatabaseInstance', 'createProject')
     AND response.status_code = 200
@@ -832,7 +972,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'aibiGenie'
     AND action_name IN ('createInstruction', 'createCuratedQuestion', 'updateSampleQuestions')
     AND response.status_code = 200
@@ -866,7 +1006,7 @@ USING (
     DATE_TRUNC('WEEK', event_time) AS period_start,
     DATE_ADD(DATE_TRUNC('WEEK', event_time), 6) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'aibiGenie'
     AND action_name IN ('createConversationMessage', 'genieCreateConversationMessage')
     AND response.status_code = 200
@@ -901,7 +1041,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'dashboards'
     AND action_name = 'publishDashboard'
     AND response.status_code = 200
@@ -935,7 +1075,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'dashboards'
     AND action_name IN ('createSchedule', 'createSubscription', 'setSubscriptions')
     AND response.status_code = 200
@@ -969,7 +1109,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'databrickssql'
     AND action_name = 'createQuery'
     AND response.status_code = 200
@@ -1003,7 +1143,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'apps'
     AND action_name IN ('createApp', 'deployApp')
     AND response.status_code = 200
@@ -1037,7 +1177,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name = 'notebook'
     AND action_name = 'createNotebook'
     AND response.status_code = 200
@@ -1071,7 +1211,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name IN ('databaseInstances', 'postgres')
     AND action_name IN ('createSyncedDatabaseTable', 'createSyncedTable')
     AND response.status_code = 200
@@ -1105,7 +1245,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name IN ('databaseInstances', 'postgres')
     AND action_name IN ('createDatabaseCatalog', 'createDatabase')
     AND response.status_code = 200
@@ -1139,7 +1279,7 @@ USING (
     CAST(MIN(event_time) AS DATE) AS period_start,
     CAST(MIN(event_time) AS DATE) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.access.audit
+  FROM {SYS_AUDIT}
   WHERE service_name IN ('databaseInstances', 'postgres')
     AND action_name = 'generateDatabaseCredential'
     AND response.status_code = 200
@@ -1175,7 +1315,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'postgres'
         AND action_name = 'createBranch'
         AND response.status_code = 200
@@ -1215,7 +1355,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'postgres'
         AND action_name = 'createRole'
         AND response.status_code = 200
@@ -1254,7 +1394,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'postgres'
         AND action_name = 'createCdfConfig'
         AND response.status_code = 200
@@ -1302,10 +1442,10 @@ USING (
       COUNT(DISTINCT t.task_key) AS task_count
     FROM (
       SELECT *, ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) AS rn
-      FROM system.lakeflow.jobs
+      FROM {SYS_JOBS}
       WHERE change_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
     ) j
-    JOIN system.lakeflow.job_tasks t ON j.job_id = t.job_id AND j.workspace_id = t.workspace_id
+    JOIN {SYS_JOB_TASKS} t ON j.job_id = t.job_id AND j.workspace_id = t.workspace_id
     WHERE j.rn = 1
       AND j.delete_time IS NULL
       AND j.creator_user_name IS NOT NULL AND j.creator_user_name != ''
@@ -1340,7 +1480,7 @@ USING (
     DATE_TRUNC('WEEK', start_time) AS period_start,
     DATE_ADD(DATE_TRUNC('WEEK', start_time), 6) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.query.history
+  FROM {SYS_QUERY_HISTORY}
   WHERE executed_by IS NOT NULL AND executed_by != ''
     AND statement_type IN ('SELECT', 'INSERT', 'MERGE', 'CREATE', 'ALTER')
     -- Human ad-hoc queries only: exclude queries issued by a job or pipeline.
@@ -1381,7 +1521,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE action_name IN ('createAlert', 'createLegacyAlert')
         AND response.status_code = 200
         AND user_identity.email IS NOT NULL AND user_identity.email != ''
@@ -1416,7 +1556,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE action_name IN ('createServingEndpoint', 'create_serving_endpoint')
         AND response.status_code = 200
         AND user_identity.email IS NOT NULL AND user_identity.email != ''
@@ -1451,7 +1591,7 @@ try:
         CAST(MIN(start_time) AS DATE) AS period_start,
         CAST(MIN(start_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.query.history
+      FROM {SYS_QUERY_HISTORY}
       WHERE LOWER(statement_text) LIKE '%ai_query%'
         AND executed_by IS NOT NULL AND executed_by != ''
         AND execution_status = 'FINISHED'
@@ -1486,7 +1626,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MAX(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       -- MLflow experiment run logging is audited as
       -- service_name='mlflowExperiment', action_name='createLoggedModel'.
       -- (The old 'createRun'/'mlflowCreateRun' names are not emitted, so the
@@ -1531,7 +1671,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name = 'createRegisteredModel'
         AND response.status_code = 200
@@ -1568,7 +1708,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'featureStore'
         AND action_name = 'createFeatureTable'
         AND response.status_code = 200
@@ -1605,7 +1745,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'knowledgeAssistant'
         AND action_name = 'create'
         AND response.status_code = 200
@@ -1642,7 +1782,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'supervisorAgent'
         AND action_name = 'create'
         AND response.status_code = 200
@@ -1679,7 +1819,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'vectorSearch'
         AND action_name = 'createVectorIndex'
         AND response.status_code = 200
@@ -1716,7 +1856,7 @@ try:
         CAST(MIN(start_time) AS DATE) AS period_start,
         CAST(MIN(start_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.query.history
+      FROM {SYS_QUERY_HISTORY}
       WHERE executed_by IS NOT NULL AND executed_by != ''
         AND LOWER(statement_text) LIKE '%cluster by%'
         AND statement_type IN ('CREATE', 'ALTER')
@@ -1754,7 +1894,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name = 'updatePermissions'
         AND response.status_code = 200
@@ -1798,7 +1938,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name = 'createCatalog'
         AND response.status_code = 200
@@ -1837,7 +1977,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name IN ('createExternalLocation', 'createStorageCredential')
         AND response.status_code = 200
@@ -1874,7 +2014,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name = 'createConnection'
         AND response.status_code = 200
@@ -1911,7 +2051,7 @@ try:
         CAST(MIN(event_time) AS DATE) AS period_start,
         CAST(MIN(event_time) AS DATE) AS period_end,
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
-      FROM system.access.audit
+      FROM {SYS_AUDIT}
       WHERE service_name = 'unityCatalog'
         AND action_name IN ('createShare', 'createRecipient')
         AND response.status_code = 200
@@ -1952,13 +2092,13 @@ try:
         CAST('{NOW}' AS TIMESTAMP) AS scored_at
       FROM (
         SELECT executed_by AS user_id, start_time AS completed_at
-        FROM system.query.history
+        FROM {SYS_QUERY_HISTORY}
         WHERE executed_by IS NOT NULL AND executed_by != ''
           AND (LOWER(statement_text) LIKE '%readstream%' OR LOWER(statement_text) LIKE '%writestream%')
           AND start_time >= DATE_SUB(CURRENT_DATE(), {LOOKBACK_DAYS})
         UNION ALL
         SELECT creator_user_name AS user_id, change_time AS completed_at
-        FROM system.lakeflow.jobs
+        FROM {SYS_JOBS}
         WHERE creator_user_name IS NOT NULL AND creator_user_name != ''
           AND trigger_type = 'CONTINUOUS'
           AND delete_time IS NULL
@@ -2019,7 +2159,7 @@ for m_id, m_name, m_pts, product_filter, dbu_threshold, require_interactive in P
         if require_interactive:
             interactive_gate = f"""
             AND EXISTS (
-              SELECT 1 FROM system.billing.usage i
+              SELECT 1 FROM {SYS_BILLING_USAGE} i
               WHERE i.identity_metadata.run_as = u.identity_metadata.run_as
                 AND i.usage_quantity > 0
                 AND i.usage_metadata.job_id IS NULL AND i.usage_metadata.dlt_pipeline_id IS NULL
@@ -2038,7 +2178,7 @@ for m_id, m_name, m_pts, product_filter, dbu_threshold, require_interactive in P
             DATE_TRUNC('MONTH', usage_date) AS period_start,
             LAST_DAY(usage_date) AS period_end,
             CAST('{NOW}' AS TIMESTAMP) AS scored_at
-          FROM system.billing.usage u
+          FROM {SYS_BILLING_USAGE} u
           WHERE identity_metadata.run_as IS NOT NULL AND identity_metadata.run_as != ''
             AND usage_quantity > 0
             AND {PRODUCT_INTERACTIVE}
@@ -2101,7 +2241,7 @@ FROM (
     SUM(usage_quantity) AS dbus,
     CAST(FLOOR(SUM(usage_quantity) / 10) AS INT) AS raw_points,
     CAST(MAX(usage_date) AS TIMESTAMP) AS event_timestamp
-  FROM system.billing.usage
+  FROM {SYS_BILLING_USAGE}
   WHERE identity_metadata.run_as IS NOT NULL AND identity_metadata.run_as != ''
     AND usage_quantity > 0
     AND {INTERACTIVE_USAGE}
@@ -2134,7 +2274,7 @@ USING (
     DATE_SUB(CURRENT_DATE(), 30) AS period_start,
     CURRENT_DATE() AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.billing.usage
+  FROM {SYS_BILLING_USAGE}
   WHERE identity_metadata.run_as IS NOT NULL AND identity_metadata.run_as != ''
     AND usage_quantity > 0
     AND {INTERACTIVE_USAGE}
@@ -2161,7 +2301,7 @@ USING (
     DATE_TRUNC('MONTH', usage_date) AS period_start,
     LAST_DAY(usage_date) AS period_end,
     CAST('{NOW}' AS TIMESTAMP) AS scored_at
-  FROM system.billing.usage
+  FROM {SYS_BILLING_USAGE}
   WHERE identity_metadata.run_as IS NOT NULL AND identity_metadata.run_as != ''
     AND usage_quantity > 0
     AND {INTERACTIVE_USAGE}
@@ -2416,7 +2556,7 @@ WITH daily_activity AS (
   SELECT
     identity_metadata.run_as AS user_id,
     CAST(usage_date AS DATE) AS activity_date
-  FROM system.billing.usage
+  FROM {SYS_BILLING_USAGE}
   WHERE identity_metadata.run_as IS NOT NULL
     AND identity_metadata.run_as != ''
     AND usage_quantity > 0
@@ -2571,7 +2711,7 @@ CREATE OR REPLACE TEMP VIEW user_products AS
 SELECT
   identity_metadata.run_as AS user_id,
   COUNT(DISTINCT billing_origin_product) AS distinct_products
-FROM system.billing.usage
+FROM {SYS_BILLING_USAGE}
 WHERE identity_metadata.run_as IS NOT NULL
   AND identity_metadata.run_as != ''
   AND usage_quantity > 0
@@ -2622,7 +2762,7 @@ SELECT
   identity_metadata.run_as AS user_id,
   MIN(usage_date) AS first_activity_date,
   MAX(usage_date) AS last_activity_date
-FROM system.billing.usage
+FROM {SYS_BILLING_USAGE}
 WHERE identity_metadata.run_as IS NOT NULL
   AND identity_metadata.run_as != ''
   AND usage_quantity > 0

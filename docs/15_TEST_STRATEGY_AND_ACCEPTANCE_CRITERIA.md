@@ -27,6 +27,17 @@ Test:
 - scoring workspace scope: every system-table read goes through the scoped sources,
   the notebook and `deploy.py` parse `workspace_ids` the same way, and unscoped SQL is
   unchanged (`tests/test_scoring_scope.py`, `tests/test_deploy_py.py`)
+- adoption exports: admin enforcement, all users/ranks/award periods, both training
+  backends, warehouse pages and result chunks, CSV formula handling, empty tables,
+  schema/row counts, missing metadata, duplicate column names, chunk identity and
+  offsets, exact dataset fields, disk spooling, interrupted downloads, and failure cleanup
+  (`tests/test_adoption_export.py`, `tests/test_export_readers.py`)
+- adoption export SQL integration: an isolated temporary local Postgres server
+  verifies the deployed table DDL, both backend query shapes over 25,002 mission
+  awards, duplicate preservation, repeat exports without writes, and the download
+  endpoint (`tests/test_adoption_export_postgres.py`). Requires Unix with `initdb`
+  and `pg_ctl` on PATH; explicitly skips when unavailable. Never connects to a
+  workspace or an existing database.
 
 ### 3. Integration tests
 
@@ -48,6 +59,10 @@ Minimum:
 - key pages render with mock API responses
 - validation state components render all statuses
 - host controls gated by role
+- Insights export: non-admin controls stay hidden, ZIP download starts, busy state
+  blocks repeat clicks, errors allow retry, telemetry failures preserve in-flight
+  exports, and login HTML never downloads as data
+  (`frontend/src/test/adoption-export.test.tsx`)
 
 ### 5. Databricks workspace smoke tests
 
@@ -72,6 +87,8 @@ In a real workspace:
 - Existing missions load.
 - Existing leaderboard loads.
 - Existing admin stats load.
+- Insights admins can download all retained adoption data; every CSV row count
+  matches its metadata and the active backend. Non-admin requests receive 403.
 - Scheduled scoring job remains deployable.
 
 ### Quest pack import

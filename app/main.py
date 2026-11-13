@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 
@@ -44,6 +45,7 @@ from services import namespace as ns
 from services import resource_service as rsvc
 from services import observability as obs
 from services import report_service as report_svc
+from services import adoption_export
 from services.validation_engine import default_engine, aggregate_status
 from services.scoring_service import default_scoring_service
 from services.resource_service import default_resource_service
@@ -1235,6 +1237,39 @@ async def get_admin_stats(user: str = Depends(get_user_email)):
             "last_refresh": None,
             "setup_required": True,
         }
+
+
+@app.get("/api/admin/export", response_class=StreamingResponse)
+def export_adoption_data(request: Request, user: str = Depends(require_admin)):
+    """Download all retained scored adoption data as a ZIP of CSV files."""
+    try:
+        backend = db.get_data_backend()
+        report = adoption_export.build_export(
+            db.iter_query,
+            backend=backend,
+            missions=MISSION_DEFINITIONS,
+            badges=BADGE_DEFINITIONS,
+            scoring_workspace_ids=get_scoring_workspace_ids(),
+        )
+    except Exception:
+        logger.exception("Adoption export failed request_id=%s", getattr(request.state, "request_id", None))
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "EXPORT_FAILED", "message": "Could not export all Quest data. Try again shortly."}},
+        )
+    logger.info("Adoption export actor=%s backend=%s rows=%s request_id=%s", user, backend,
+                report.row_counts, getattr(request.state, "request_id", None))
+    return StreamingResponse(
+        report.chunks(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{report.filename}"',
+            "Content-Length": str(report.size),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+        background=BackgroundTask(report.file.close),
+    )
 
 
 @app.get("/api/admin/pipeline-status")

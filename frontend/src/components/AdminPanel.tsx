@@ -19,6 +19,7 @@ import type { AdminListResponse, AdminStats, PipelineStatus } from '../types'
 import { useApi, fetchJson } from '../lib/api'
 import { QuestCard } from './quest/QuestCard'
 import { EmptyState, ErrorState, Skeleton, SkeletonText } from './quest/States'
+import AdoptionExport from './AdoptionExport'
 
 const LEVEL_COLORS: Record<string, string> = {
   Bronze: '#CD7F32',
@@ -48,11 +49,8 @@ export function scopeLabel(ids?: string[]): { text: string; title?: string } {
 // open to every user -- pipeline health, KPIs, and the completion/level
 // charts below are read-only platform telemetry, and the backing endpoints
 // (/api/admin/stats, /api/admin/pipeline-status) accept any authenticated
-// user. Only the two sections with real write/privilege consequences are
-// still admin-gated, both server-side (require_admin) and here so a non-admin
-// never sees controls that would just 403 if clicked: DataBackendToggle can
-// switch what every user's data reads from, and AdminsManager can grant or
-// revoke admin access itself.
+// user. Participant-level exports, backend switching, and admin management
+// require admin access here and server-side (require_admin).
 export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
   const stats = useApi<AdminStats>('/api/admin/stats')
   const pipeline = useApi<PipelineStatus>('/api/admin/pipeline-status')
@@ -76,17 +74,13 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
   const avgCompletions = s && s.total_users > 0 ? (s.total_mission_completions / s.total_users).toFixed(1) : '0'
   const adoptionBreadth = s ? s.level_distribution.reduce((acc, l) => acc + (l.level !== 'Bronze' ? l.cnt : 0), 0) : 0
 
-  if (stats.error && !s) {
-    return (
-      <div className="mx-auto max-w-[1280px]">
-        <ErrorState message={stats.error} onRetry={() => { stats.reload(); pipeline.reload() }} />
-      </div>
-    )
-  }
+  const statsUnavailable = Boolean(stats.error && !s)
 
   return (
     <div className="mx-auto max-w-[1280px] space-y-5">
-      <QuestCard className={isHealthy ? 'border-[#22C55E]/30' : 'border-[#F5B72E]/30'}>
+      {statsUnavailable && <ErrorState message={stats.error ?? 'Insights telemetry is unavailable.'} onRetry={() => { stats.reload(); pipeline.reload() }} />}
+
+      {!statsUnavailable && <QuestCard className={isHealthy ? 'border-[#22C55E]/30' : 'border-[#F5B72E]/30'}>
         <div className="relative z-10 flex flex-wrap items-center gap-4">
           {pipeline.loading && !p ? (
             <Skeleton className="h-6 w-6 rounded-full" />
@@ -107,18 +101,20 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
           </div>
           <Clock className="h-5 w-5 text-slate-500" />
         </div>
-      </QuestCard>
+      </QuestCard>}
 
       {isAdmin && <DataBackendToggle />}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {!statsUnavailable && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={Users} label="Total Users" value={s ? s.total_users.toLocaleString() : undefined} accent="#00C2D7" loading={stats.loading && !s} />
         <Kpi icon={Target} label="Mission Completions" value={s ? s.total_mission_completions.toLocaleString() : undefined} accent="#FF5F1F" loading={stats.loading && !s} />
         <Kpi icon={Activity} label="Avg / User" value={s ? avgCompletions : undefined} accent="#8B5CF6" loading={stats.loading && !s} />
         <Kpi icon={Gauge} label="Past Bronze" value={s ? adoptionBreadth.toLocaleString() : undefined} detail="users leveled up" accent="#22C55E" loading={stats.loading && !s} />
-      </div>
+      </div>}
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {isAdmin && <AdoptionExport lastRefresh={s?.last_refresh} totalUsers={s?.total_users} />}
+
+      {!statsUnavailable && <div className="grid gap-5 lg:grid-cols-2">
         <QuestCard title="Top Mission Completions" eyebrow="Adoption">
           {stats.loading && !s ? (
             <SkeletonText lines={6} />
@@ -169,9 +165,9 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
             <EmptyState icon={TrendingUp} title="No level data yet" message="Level cohorts populate after the first scoring run." />
           )}
         </QuestCard>
-      </div>
+      </div>}
 
-      <QuestCard title="Data Sources" eyebrow="Telemetry">
+      {!statsUnavailable && <QuestCard title="Data Sources" eyebrow="Telemetry">
         <div className="grid gap-3 sm:grid-cols-3">
           {[
             { label: 'System Tables', detail: 'Compute, jobs & query telemetry' },
@@ -187,7 +183,7 @@ export default function AdminPanel({ isAdmin }: { isAdmin: boolean }) {
             </div>
           ))}
         </div>
-      </QuestCard>
+      </QuestCard>}
 
       {isAdmin && <AdminsManager />}
     </div>

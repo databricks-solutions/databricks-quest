@@ -80,7 +80,7 @@ Either way the deploy also selects or creates a serverless SQL warehouse (the sc
 - **Dashboard** -- Current level, points, streak, badges, and next missions to complete
 - **Missions** -- 60 missions across 6 pillars: **Getting Started**, **Business Users**, **Data Engineering**, **Data Science**, **App Dev (Lakebase)**, and **Governance** (the Missions page has a tab per pillar, plus an All Missions tab)
 - **Leaderboard** -- Top 10 users ranked by points, resets every Saturday. Weekly swag prizes for the top 3.
-- **Admin** -- Pipeline health, user stats, mission completion charts, level distribution, and the **Data Backend** toggle (Lakebase / warehouse)
+- **Insights** -- Pipeline health, user stats, mission completion charts, and level distribution. Admins can download a **full data export** (ZIP of CSVs with all users, points, mission awards, leaderboards, badges, notifications, training records, and catalogs), manage admin access, and switch the **Data Backend** (Lakebase / warehouse). See the [export contract](docs/08_API_CONTRACT.md#apiadminexport-adoption-mode-admin-only) for scope and file details.
 
 ## Missions
 

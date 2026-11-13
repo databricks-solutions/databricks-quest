@@ -23,7 +23,7 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime, date
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 logger = logging.getLogger("databricks-quest.db")
 
@@ -428,6 +428,25 @@ def execute_query(query: str, params: Tuple = ()) -> List[Dict[str, Any]]:
                 rows = cur.fetchall()
                 return [{k: serialize(v) for k, v in dict(row).items()} for row in rows]
             return []
+
+
+def iter_query(query: str, params: Tuple = (), *, backend: str) -> Iterator[Dict[str, Any]]:
+    """Read export rows in batches, using the backend chosen at export start."""
+    if backend == "warehouse":
+        import warehouse_backend as _wh
+        yield from _wh.iter_query(query, params)
+        return
+    if backend != "lakebase":
+        raise ValueError("Unknown data backend")
+
+    import psycopg2.extras
+
+    with _lease(autocommit=True) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(query, params)
+            while rows := cur.fetchmany(1000):
+                for row in rows:
+                    yield {k: serialize(v) for k, v in dict(row).items()}
 
 
 def execute(query: str, params: Tuple = ()) -> int:

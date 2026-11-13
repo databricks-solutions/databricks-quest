@@ -28,7 +28,9 @@ The adoption endpoints (`/api/profile`, `/api/missions`, `/api/leaderboard`,
 
 ### Admin page gating (DB-backed, shared)
 
-`/api/admin/*` is gated by an admin allowlist independent of Event Mode. The
+Participant exports, backend switching, and admin management require the admin
+allowlist independent of Event Mode. Aggregate Insights reads (`stats`,
+`pipeline-status`, and `GET data-backend`) accept every signed-in user. The
 durable source of truth is the Lakebase table `quest_admins`, which is **shared
 across apps** — in federation the master owns it and child apps read/write it
 through the shared event-writer role, so an admin is automatically an admin on
@@ -46,14 +48,14 @@ only). Gating behaviour:
 
 - When the effective set is **non-empty**, users not in it get
   `403 { "error": { "code": "FORBIDDEN", "message": "Admin access required." } }`.
-- When it is **empty** (no env allowlist and an empty/unreachable table, e.g.
-  local dev), the endpoints stay open (prior behaviour).
+- When it is **empty**, deployed apps (`DATABRICKS_CLIENT_ID` set) deny admin
+  access; local development without a service principal keeps legacy open access.
 - If the DB read fails, gating falls back to the env allowlist so the deployer
   keeps access.
 
 `GET /api/profile` returns `"is_admin": true|false` for the caller so the
-frontend can hide the Admin nav (defence-in-depth; the 403 gate is the real
-boundary).
+frontend can hide privileged controls within Insights (the server's 403 gate is
+the access boundary). The Insights navigation remains visible to everyone.
 
 #### Admin management endpoints (admin-only, always available)
 
@@ -86,6 +88,64 @@ GET /api/notifications
 GET /api/admin/stats
 GET /api/admin/pipeline-status
 ```
+
+### `/api/admin/export` (Adoption Mode, admin-only)
+
+```http
+GET /api/admin/export
+200 OK
+Content-Type: application/zip
+Content-Disposition: attachment; filename="quest-adoption-export-<UTC timestamp>.zip"
+Cache-Control: no-store
+```
+
+The **Insights → Full data export → Export all data** button downloads the report.
+The export card remains available if aggregate Insights telemetry fails, and a
+telemetry error does not cancel an export already in progress.
+The endpoint enforces `require_admin`, even for a direct request. It accepts no
+user, period, or row-limit filter, and includes every retained row from the active
+data backend and the deployment's existing scoring scope. It works independently
+of Event Mode and needs no new tables or grants.
+
+| CSV | Contents |
+|---|---|
+| `user_profiles.csv` | All scored users, display names, total points, levels, streaks, mission/badge counts, activity dates, product breadth, refresh time |
+| `mission_completions.csv` | Every user/mission award, mission name, awarded points, completion time, repeat period, scoring time |
+| `points_history.csv` | Point events, including mission and consumption points, reason and timestamps |
+| `leaderboard.csv` | All users with all-time, weekly, and monthly points and ranks; no top-10 limit |
+| `badges.csv` | User badge awards and earned times |
+| `notifications.csv` | All retained notifications and related mission/point fields |
+| `training_completions.csv` | Warehouse backend: the Delta training feed, including course type and completion time |
+| `training_attestations.csv` | Lakebase backend: local course self-attestations, including mission/course IDs and attestation time |
+| `mission_catalog.csv` | Current mission definitions, points, tracks, award types, descriptions, documentation and learning resources |
+| `badge_catalog.csv` | Current badge definitions and award criteria |
+
+Exactly one training CSV appears, according to the backend. These training sources
+cover different records: a Lakebase report does not export the Delta classroom
+feed, and a warehouse report does not read pending Lakebase attestations.
+
+The archive also includes `metadata.json` with format version, start/end UTC
+timestamps, active backend, scoring workspace IDs, per-file columns and row
+counts, and interpretation notes, plus `README.txt` with those notes. CSVs use
+UTF-8 with BOM for spreadsheet compatibility. Nested catalog fields use JSON;
+empty cells represent null or empty strings. Formula-like text receives a leading
+apostrophe; numeric cells preserve their values.
+
+The report preserves repeatable awards and orphaned/retired mission IDs. Do not
+sum mission completions and point history together: they overlap. Profile and
+leaderboard totals reflect their stored refresh time. Reads happen sequentially,
+so scoring or training updates during an export can affect consistency between
+files or warehouse pages; this is not a transactional backup. Exported history
+follows the deployment's retention; it excludes raw system-table telemetry,
+credentials, operational settings, and dormant Event Mode records.
+
+The server pins the backend for the request, pages warehouse reads, consumes
+every Statements API result chunk, and checks required result metadata, unique
+column names, dataset fields, row counts, chunk positions, and truncation. It builds
+the ZIP in a temporary spool before sending download headers and removes the
+temporary file after the response. A failed dataset aborts the entire report:
+`503 EXPORT_FAILED` returns the normal error envelope, never a partial ZIP.
+Non-admins receive `403 FORBIDDEN`.
 
 ### `/api/health` migration status (PR01)
 

@@ -21,7 +21,7 @@ import os
 import time
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 logger = logging.getLogger("databricks-quest.warehouse")
 
@@ -91,6 +91,11 @@ def _translate(query: str, params: Tuple) -> Tuple[str, list]:
 
 def query(sql: str, params: Tuple = ()) -> List[Dict[str, Any]]:
     """Run a read query on the warehouse against the scored Delta tables."""
+    return list(iter_query(sql, params))
+
+
+def iter_query(sql: str, params: Tuple = ()) -> Iterator[Dict[str, Any]]:
+    """Read every Statements API result chunk; reject incomplete results."""
     wid = _WAREHOUSE_ID()
     if not wid:
         raise RuntimeError("QUEST_SQL_WAREHOUSE_ID not set for warehouse data backend")
@@ -110,8 +115,12 @@ def query(sql: str, params: Tuple = ()) -> List[Dict[str, Any]]:
     def _state(r):
         return r.status.state.value if r.status and r.status.state else None
 
+    deadline = time.monotonic() + 180
     state = _state(resp)
     while state in ("PENDING", "RUNNING"):
+        if time.monotonic() >= deadline:
+            w.statement_execution.cancel_execution(resp.statement_id)
+            raise TimeoutError("warehouse query timed out")
         time.sleep(1)
         resp = w.statement_execution.get_statement(resp.statement_id)
         state = _state(resp)
@@ -120,10 +129,61 @@ def query(sql: str, params: Tuple = ()) -> List[Dict[str, Any]]:
         err = resp.status.error.message if (resp.status and resp.status.error) else state
         raise RuntimeError(f"warehouse query failed: {err}")
 
+    # Known mutation statements may legitimately have no result. Read statements
+    # (including WITH, SHOW and commented SQL) must prove result completeness.
+    verb = statement.lstrip().split(maxsplit=1)[0].upper()
+    returns_rows = verb not in {"MERGE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "GRANT", "REVOKE", "TRUNCATE", "USE", "SET"}
+    if returns_rows and resp.manifest is None:
+        raise RuntimeError("warehouse result missing manifest")
+    expected_rows = resp.manifest.total_row_count if resp.manifest else None
+    if returns_rows and (type(expected_rows) is not int or expected_rows < 0):
+        raise RuntimeError("warehouse result missing or invalid row count metadata")
     schema = resp.manifest.schema if (resp.manifest and resp.manifest.schema) else None
     cols = [(c.name, getattr(c.type_name, "value", str(c.type_name))) for c in (schema.columns or [])] if schema else []
-    data = resp.result.data_array if (resp.result and resp.result.data_array) else []
-    rows: List[Dict[str, Any]] = []
-    for r in data:
-        rows.append({cols[i][0]: _serialize(_coerce(r[i], cols[i][1])) for i in range(len(cols))})
-    return rows
+    if returns_rows and not cols:
+        raise RuntimeError("warehouse result missing schema")
+    names = [name for name, _ in cols]
+    if any(not isinstance(name, str) or not name for name in names) or len(names) != len(set(names)):
+        raise RuntimeError("warehouse result invalid column names")
+    if resp.manifest and resp.manifest.truncated:
+        raise RuntimeError("warehouse result truncated; use a smaller export page")
+    chunk = resp.result
+    row_count = 0
+    seen_chunks = set()
+    requested_index = 0
+    while chunk is not None:
+        rows = chunk.data_array or []
+        if returns_rows and chunk.next_chunk_internal_link and chunk.next_chunk_index is None:
+            raise RuntimeError("warehouse result missing next chunk index")
+        # The API can return result={} for an empty SELECT. The manifest still
+        # supplies schema and total_row_count=0, so no chunk metadata is needed.
+        proven_empty = (
+            expected_rows == 0 and not rows and requested_index == 0
+            and chunk.next_chunk_index is None and chunk.next_chunk_internal_link is None
+            and all(value in (None, 0) for value in (chunk.chunk_index, chunk.row_offset, chunk.row_count))
+        )
+        if returns_rows and not proven_empty and (
+            chunk.chunk_index != requested_index
+            or chunk.row_offset != row_count
+            or chunk.row_count != len(rows)
+        ):
+            raise RuntimeError("warehouse result chunk metadata mismatch")
+        for row in rows:
+            if not cols:
+                raise RuntimeError("warehouse result missing schema")
+            if len(row) != len(cols):
+                raise RuntimeError("warehouse result column count mismatch")
+            row_count += 1
+            yield {name: _serialize(_coerce(row[i], kind)) for i, (name, kind) in enumerate(cols)}
+        next_index = chunk.next_chunk_index
+        if next_index is None:
+            break
+        if next_index in seen_chunks:
+            raise RuntimeError("warehouse result repeated a chunk")
+        if type(next_index) is not int or next_index != requested_index + 1:
+            raise RuntimeError("warehouse result invalid next chunk index")
+        seen_chunks.add(next_index)
+        requested_index = next_index
+        chunk = w.statement_execution.get_statement_result_chunk_n(resp.statement_id, next_index)
+    if expected_rows is not None and row_count != expected_rows:
+        raise RuntimeError("warehouse result row count mismatch")

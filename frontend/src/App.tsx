@@ -120,8 +120,8 @@ export default function App() {
   }, [fetchProfile, fetchNotifications, fetchFederation, fetchHealth])
 
   // Insights (formerly "Admin") is visible to everyone -- it's read-only
-  // platform telemetry. Only the Data Backend switch and admin-management
-  // panels inside it are still gated server-side (QUEST_ADMIN_ALLOWLIST); see
+  // platform telemetry. Full exports, the Data Backend switch, and admin-management
+  // panels inside it are gated server-side (QUEST_ADMIN_ALLOWLIST); see
   // the `isAdmin` prop passed to <AdminPanel> below. No profile-dependent
   // filtering here means the nav item never has to wait on /api/profile to
   // appear.
